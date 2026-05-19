@@ -358,7 +358,7 @@ def main():
         "revision": model_args.model_revision,
         "use_auth_token": True if model_args.use_auth_token else None,
     }
-    # tokenizer = AutoTokenizer.from_pretrained(model_args.config_name, use_fast=False)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.config_name, **tokenizer_kwargs)
 
     ## we use the tokenizer from vicuna
     if "decapoda-research" in model_args.config_name:

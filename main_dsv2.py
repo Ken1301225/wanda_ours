@@ -3,11 +3,12 @@ import os
 import sys
 import numpy as np
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 from importlib.metadata import version
 
 from lib.prune_dsv2 import prune_wanda, prune_magnitude, prune_sparsegpt, prune_ablate, check_sparsity, find_layers
 from lib.eval import eval_ppl, eval_zero_shot
+from lib.tokenizer import load_tokenizer
 
 print('torch', version('torch'))
 print('transformers', version('transformers'))
@@ -70,7 +71,7 @@ def main():
     model = get_llm(args.model, args.cache_dir)
     print(model)
     model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False,trust_remote_code=True,)
+    tokenizer = load_tokenizer(args.model, use_fast=False, trust_remote_code=True)
 
     device = torch.device("cuda:0")
     print("use device ", device)

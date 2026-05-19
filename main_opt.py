@@ -2,11 +2,12 @@ import argparse
 import os 
 import numpy as np
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoModelForCausalLM
 from importlib.metadata import version
 
 from lib.prune_opt import prune_wanda, prune_magnitude, prune_sparsegpt, prune_ablate, check_sparsity, find_layers
 from lib.eval import eval_ppl, eval_zero_shot
+from lib.tokenizer import load_tokenizer
 
 print('torch', version('torch'))
 print('transformers', version('transformers'))
@@ -56,7 +57,7 @@ def main():
     print(f"loading llm model {args.model}")
     model = get_llm(args.model, args.cache_dir)
     model.eval()
-    tokenizer = AutoTokenizer.from_pretrained(args.model, use_fast=False)
+    tokenizer = load_tokenizer(args.model, use_fast=False)
 
     device = torch.device("cuda:0")
     if "30b" in args.model or "66b" in args.model: # for 30b and 65b we use device_map to load onto multiple A6000 GPUs, thus the processing here.
