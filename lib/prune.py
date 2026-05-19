@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
 from .layerwrapper import WrappedGPT
+from .moe_wanda import attach_moe_wanda_hooks, build_moe_wanda_metric, build_moe_wanda_mask
 from .data import get_loaders 
 
 from .ablate import AblateGPT 
@@ -152,6 +153,8 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
         for name in subset:
             wrapped_layers[name] = WrappedGPT(subset[name])
 
+        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(layer, subset)
+
         def add_batch(name):
             def tmp(_, inp, out):
                 wrapped_layers[name].add_batch(inp[0].data, out.data)
@@ -165,10 +168,13 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids,position_embeddings=position_embeddings)[0]
         for h in handles:
             h.remove()
+        for h in moe_handles:
+            h.remove()
 
         for name in subset:
             print(f"pruning layer {i} name {name}")
             W_metric = torch.abs(subset[name].weight.data) * torch.sqrt(wrapped_layers[name].scaler_row.reshape((1,-1)))
+            W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups, default_metric=W_metric)
 
             W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
             if prune_n != 0:
@@ -366,6 +372,8 @@ def prune_ablate(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         for name in subset:
             gpts[name] = AblateGPT(subset[name])
 
+        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(layer, subset)
+
         def add_batch(name):
             def tmp(_, inp, out):
                 gpts[name].add_batch(inp[0].data, out.data)
@@ -379,19 +387,51 @@ def prune_ablate(args, model, tokenizer, dev, prune_n=0, prune_m=0):
             outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids,position_embeddings=position_embeddings)[0]
         for h in handles:
             h.remove()
+        for h in moe_handles:
+            h.remove()
 
         for name in gpts:
             print(i, name)
             print('Pruning ...')
 
             if args.prune_method == "ablate_wanda_seq":
-                prune_mask = gpts[name].get_wanda_mask(args.sparsity_ratio, prune_n, prune_m)
+                prune_mask = build_moe_wanda_mask(
+                    layer,
+                    name,
+                    subset[name],
+                    moe_collectors,
+                    moe_groups,
+                    args.sparsity_ratio,
+                    prune_n=prune_n,
+                    prune_m=prune_m,
+                )
+                if prune_mask is None:
+                    prune_mask = gpts[name].get_wanda_mask(args.sparsity_ratio, prune_n, prune_m)
             elif args.prune_method == "ablate_mag_seq":
                 prune_mask = gpts[name].get_mag_mask(args.sparsity_ratio, prune_n, prune_m)
             elif "iter" in args.prune_method:
                 prune_mask = None 
 
-            gpts[name].fasterprune(args, args.sparsity_ratio, mask=prune_mask, prune_n=prune_n, prune_m=prune_m, percdamp=0.01, blocksize=128)
+            wanda_metric = None
+            if "wanda" in args.prune_method:
+                wanda_metric = build_moe_wanda_metric(
+                    layer,
+                    name,
+                    subset[name],
+                    moe_collectors,
+                    moe_groups,
+                )
+
+            gpts[name].fasterprune(
+                args,
+                args.sparsity_ratio,
+                mask=prune_mask,
+                prune_n=prune_n,
+                prune_m=prune_m,
+                percdamp=0.01,
+                blocksize=128,
+                wanda_metric=wanda_metric,
+            )
             gpts[name].free()
 
         for j in range(args.nsamples):
