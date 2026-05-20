@@ -1,4 +1,5 @@
 import argparse
+import json
 import os 
 import numpy as np
 import torch
@@ -13,6 +14,57 @@ print('torch', version('torch'))
 print('transformers', version('transformers'))
 print('accelerate', version('accelerate'))
 print('# of gpus: ', torch.cuda.device_count())
+
+
+def append_run_diagnostic(args, payload):
+    diagnostics_path = getattr(args, "diagnostics_path", None)
+    if not diagnostics_path:
+        return
+
+    with open(diagnostics_path, "a") as f:
+        f.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def append_run_summary(args, line):
+    diagnostics_summary_path = getattr(args, "diagnostics_summary_path", None)
+    if not diagnostics_summary_path:
+        return
+
+    with open(diagnostics_summary_path, "a") as f:
+        print(line, file=f, flush=True)
+
+
+def prepare_run_outputs(args):
+    if not args.save:
+        return
+
+    os.makedirs(args.save, exist_ok=True)
+    args.diagnostics_path = os.path.join(args.save, f"diagnostics_{args.prune_method}.jsonl")
+    args.diagnostics_summary_path = os.path.join(args.save, f"diagnostics_{args.prune_method}.txt")
+
+    open(args.diagnostics_path, "w").close()
+    open(args.diagnostics_summary_path, "w").close()
+
+    append_run_diagnostic(
+        args,
+        {
+            "event": "run_start",
+            "model": args.model,
+            "prune_method": args.prune_method,
+            "seed": args.seed,
+            "nsamples": args.nsamples,
+            "sparsity_ratio": args.sparsity_ratio,
+            "sparsity_type": args.sparsity_type,
+            "use_variant": bool(args.use_variant),
+            "save": args.save,
+            "save_model": args.save_model,
+            "torch_version": version("torch"),
+            "transformers_version": version("transformers"),
+            "accelerate_version": version("accelerate"),
+            "cuda_device_count": torch.cuda.device_count(),
+        },
+    )
+    append_run_summary(args, f"run_start method={args.prune_method} model={args.model} sparsity={args.sparsity_ratio} nsamples={args.nsamples}")
 
 def get_llm(model_name, cache_dir="llm_weights"):
     model = AutoModelForCausalLM.from_pretrained(
@@ -43,6 +95,8 @@ def main():
 
     parser.add_argument("--eval_zero_shot", action="store_true")
     args = parser.parse_args()
+
+    prepare_run_outputs(args)
 
     # Setting seeds for reproducibility
     np.random.seed(args.seed)
@@ -83,12 +137,25 @@ def main():
     ppl_test = eval_ppl(args, model, tokenizer, device)
     print(f"wikitext perplexity {ppl_test}")
 
-    if not os.path.exists(args.save):
-        os.makedirs(args.save)
-    save_filepath = os.path.join(args.save, f"log_{args.prune_method}.txt")
-    with open(save_filepath, "w") as f:
-        print("method\tactual_sparsity\tppl_test", file=f, flush=True)
-        print(f"{args.prune_method}\t{sparsity_ratio:.4f}", file=f, flush=True) # \t{ppl_test:.4f}
+    append_run_diagnostic(
+        args,
+        {
+            "event": "run_complete",
+            "model": args.model,
+            "prune_method": args.prune_method,
+            "actual_sparsity": float(sparsity_ratio),
+            "ppl_test": float(ppl_test),
+        },
+    )
+    append_run_summary(args, f"run_complete actual_sparsity={sparsity_ratio:.6f} ppl_test={ppl_test:.6f}")
+
+    if args.save:
+        if not os.path.exists(args.save):
+            os.makedirs(args.save)
+        save_filepath = os.path.join(args.save, f"log_{args.prune_method}.txt")
+        with open(save_filepath, "w") as f:
+            print("method\tactual_sparsity\tppl_test", file=f, flush=True)
+            print(f"{args.prune_method}\t{sparsity_ratio:.4f}\t{ppl_test:.4f}", file=f, flush=True)
 
 
     if args.save_model:

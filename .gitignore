@@ -2,3 +2,4 @@
 .env
 *.pyc
 *.DS_Store
+wanda_gpt_core.md
