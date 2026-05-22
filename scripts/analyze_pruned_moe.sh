@@ -2,16 +2,17 @@
 
 set -euo pipefail
 
+export CUDA_VISIBLE_DEVICES='0'
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${PYTHON_BIN:-python}"
 
 # Edit these paths before running. Add more entries to compare multiple pruned models.
 model_paths=(
-    "/path/to/pruned_model"
+    "/data1/ldk/nlp/wanda_moe/ckpt_20260521_103933/"
     # "/path/to/another_pruned_model"
 )
 
-output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/pruned_moe_analysis}"
+output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/wanda_moe_05}"
 trust_remote_code="${TRUST_REMOTE_CODE:-1}"
 max_pattern_plots="${MAX_PATTERN_PLOTS:-9}"
 dpi="${DPI:-180}"
