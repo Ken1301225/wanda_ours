@@ -9,6 +9,8 @@ from pathlib import Path
 
 EXPERT_NAME_RE = re.compile(r"(?:^|\.)(?:layers)\.(\d+)\..*\.experts\.(\d+)\.(gate_proj|up_proj|down_proj)$")
 PROJECTION_ORDER = ("gate_proj", "up_proj", "down_proj")
+DEPTH_BUCKET_ORDER = ("shallow", "mid", "deep")
+TWILIGHT_CMAP = "twilight"
 
 
 def build_parser():
@@ -38,6 +40,10 @@ def mean(values):
     return sum(values) / len(values) if values else 0.0
 
 
+def collapse_incidence(values):
+    return mean([1.0 if value > 0 else 0.0 for value in values])
+
+
 def aggregate_expert_rows(module_rows):
     grouped = defaultdict(list)
     for row in module_rows:
@@ -63,6 +69,11 @@ def aggregate_expert_rows(module_rows):
     return aggregated
 
 
+def depth_bucket_for_position(position, total_positions):
+    bucket_idx = min(len(DEPTH_BUCKET_ORDER) - 1, (len(DEPTH_BUCKET_ORDER) * position) // max(1, total_positions))
+    return DEPTH_BUCKET_ORDER[bucket_idx]
+
+
 def aggregate_layer_projection_rows(module_rows):
     grouped = defaultdict(list)
     for row in module_rows:
@@ -86,6 +97,78 @@ def aggregate_layer_projection_rows(module_rows):
             }
         )
     return aggregated
+
+
+def aggregate_layer_depth_projection_rows(module_rows):
+    rows_by_model = defaultdict(list)
+    for row in module_rows:
+        rows_by_model[row["model_label"]].append(row)
+
+    grouped = defaultdict(list)
+    for model_label, rows in rows_by_model.items():
+        layers = sorted({row["layer"] for row in rows})
+        layer_to_bucket = {
+            layer: depth_bucket_for_position(position, len(layers))
+            for position, layer in enumerate(layers)
+        }
+        for row in rows:
+            key = (model_label, layer_to_bucket[row["layer"]], row["projection"])
+            grouped[key].append(row["zero_col_ratio"])
+
+    aggregated = []
+    for model_label in sorted({key[0] for key in grouped}):
+        for depth_bucket in DEPTH_BUCKET_ORDER:
+            for projection in PROJECTION_ORDER:
+                values = grouped.get((model_label, depth_bucket, projection))
+                if not values:
+                    continue
+                aggregated.append(
+                    {
+                        "model_label": model_label,
+                        "depth_bucket": depth_bucket,
+                        "projection": projection,
+                        "module_count": len(values),
+                        "mean_zero_col_ratio": mean(values),
+                    }
+                )
+    return aggregated
+
+
+def aggregate_expert_projection_rows(module_rows):
+    grouped = defaultdict(list)
+    for row in module_rows:
+        key = (row["model_label"], row["expert"], row["projection"])
+        grouped[key].append(row)
+
+    aggregated = []
+    for (model_label, expert, projection), rows in sorted(grouped.items()):
+        zero_col_values = [row["zero_col_ratio"] for row in rows]
+        aggregated.append(
+            {
+                "model_label": model_label,
+                "expert": expert,
+                "projection": projection,
+                "layer_count": len(rows),
+                "mean_zero_col_ratio": mean(zero_col_values),
+                "max_zero_col_ratio": max(zero_col_values),
+                "collapse_incidence": collapse_incidence(zero_col_values),
+            }
+        )
+    return aggregated
+
+
+def build_ranked_expert_projection_rows(expert_projection_rows, projection):
+    ranked = [row for row in expert_projection_rows if row["projection"] == projection]
+    return sorted(
+        ranked,
+        key=lambda row: (
+            row.get("mean_zero_col_ratio", 0.0),
+            row.get("max_zero_col_ratio", 0.0),
+            row.get("collapse_incidence", 0.0),
+            -row["expert"],
+        ),
+        reverse=True,
+    )
 
 
 def select_pattern_samples(module_rows, max_pattern_plots):
@@ -144,7 +227,6 @@ def collect_module_rows(model, model_label):
     import torch.nn as nn
 
     module_rows = []
-    module_weights = {}
 
     for name, module in model.named_modules():
         parsed = parse_expert_module_name(name)
@@ -174,10 +256,9 @@ def collect_module_rows(model, model_label):
             "l2_norm": float(weight.norm().item()),
         }
         module_rows.append(row)
-        module_weights[name] = weight
 
     module_rows.sort(key=lambda row: (row["layer"], row["expert"], PROJECTION_ORDER.index(row["projection"])))
-    return module_rows, module_weights
+    return module_rows
 
 
 def ensure_parent(path):
@@ -208,7 +289,16 @@ def downsample_mask(mask, max_side):
     return mask[::row_step, ::col_step]
 
 
-def save_heatmap(matrix, row_labels, col_labels, title, path, dpi, cmap="viridis", vmin=0.0, vmax=1.0):
+def build_twilight_palette(num_colors):
+    import matplotlib
+
+    if num_colors <= 0:
+        return []
+    positions = [0.5] if num_colors == 1 else [0.15 + 0.7 * idx / (num_colors - 1) for idx in range(num_colors)]
+    return [matplotlib.colormaps[TWILIGHT_CMAP](position) for position in positions]
+
+
+def save_heatmap(matrix, row_labels, col_labels, title, path, dpi, cmap=TWILIGHT_CMAP, vmin=0.0, vmax=1.0):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -240,7 +330,7 @@ def save_pattern_mask(weight, title, path, dpi, max_side):
     zero_mask = downsample_mask(zero_mask, max_side=max_side)
     ensure_parent(path)
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.imshow(zero_mask, aspect="auto", cmap="gray_r", vmin=0.0, vmax=1.0)
+    ax.imshow(zero_mask, aspect="auto", cmap=TWILIGHT_CMAP, vmin=0.0, vmax=1.0)
     ax.set_title(title)
     ax.set_xlabel("Input Channel")
     ax.set_ylabel("Output Channel")
@@ -259,28 +349,98 @@ def save_projection_summary_plot(layer_projection_rows, path, dpi):
     rows = layer_projection_rows
     models = sorted({row["model_label"] for row in rows})
     projections = list(PROJECTION_ORDER)
-    stats = {
-        "mean_sparsity": "Mean Sparsity",
-        "mean_zero_col_ratio": "Mean Zero Column Ratio",
-        "mean_zero_row_ratio": "Mean Zero Row Ratio",
-    }
+    colors = build_twilight_palette(len(projections))
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-    for ax, (metric_key, metric_label) in zip(axes, stats.items()):
-        width = 0.8 / max(1, len(projections))
-        x_positions = list(range(len(models)))
-        for offset, projection in enumerate(projections):
-            values = []
-            for model in models:
-                matched = [row[metric_key] for row in rows if row["model_label"] == model and row["projection"] == projection]
-                values.append(mean(matched))
-            xs = [x + (offset - (len(projections) - 1) / 2) * width for x in x_positions]
-            ax.bar(xs, values, width=width, label=projection)
+    fig, ax = plt.subplots(figsize=(12, 5))
+    width = 0.8 / max(1, len(projections))
+    x_positions = list(range(len(models)))
+    for offset, projection in enumerate(projections):
+        values = []
+        for model in models:
+            matched = [row["mean_zero_col_ratio"] for row in rows if row["model_label"] == model and row["projection"] == projection]
+            values.append(mean(matched))
+        xs = [x + (offset - (len(projections) - 1) / 2) * width for x in x_positions]
+        ax.bar(xs, values, width=width, label=projection, color=colors[offset])
+    ax.set_title("Mean Zero Column Ratio by Model and Projection")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(models, rotation=25, ha="right")
+    ax.set_ylim(0.0, 1.0)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_depth_projection_bar_plot(depth_projection_rows, path, dpi):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ensure_parent(path)
+    colors = build_twilight_palette(len(DEPTH_BUCKET_ORDER))
+    fig, ax = plt.subplots(figsize=(10, 5))
+    width = 0.8 / max(1, len(DEPTH_BUCKET_ORDER))
+    x_positions = list(range(len(PROJECTION_ORDER)))
+
+    for offset, depth_bucket in enumerate(DEPTH_BUCKET_ORDER):
+        values = []
+        for projection in PROJECTION_ORDER:
+            matched = [
+                row["mean_zero_col_ratio"]
+                for row in depth_projection_rows
+                if row["depth_bucket"] == depth_bucket and row["projection"] == projection
+            ]
+            values.append(mean(matched))
+        xs = [x + (offset - (len(DEPTH_BUCKET_ORDER) - 1) / 2) * width for x in x_positions]
+        ax.bar(xs, values, width=width, label=depth_bucket, color=colors[offset])
+
+    ax.set_title("Zero Column Ratio by Layer Depth and Projection")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(PROJECTION_ORDER, rotation=20)
+    ax.set_ylim(0.0, 1.0)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_expert_rank_plot(expert_projection_rows, projection, path, dpi):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ranked_rows = build_ranked_expert_projection_rows(expert_projection_rows, projection)
+    if not ranked_rows:
+        return
+
+    ensure_parent(path)
+    metrics = (
+        ("mean_zero_col_ratio", "Mean Zero Col Ratio"),
+        ("max_zero_col_ratio", "Max Zero Col Ratio"),
+        ("collapse_incidence", "Collapse Incidence"),
+    )
+    colors = build_twilight_palette(len(metrics))
+    expert_labels = [f"expert_{row['expert']}" for row in ranked_rows]
+    y_positions = list(range(len(ranked_rows)))
+    fig_height = max(6, min(18, 0.35 * len(ranked_rows)))
+    fig, axes = plt.subplots(1, 3, figsize=(18, fig_height), sharey=True)
+
+    for idx, (ax, (metric_key, metric_label)) in enumerate(zip(axes, metrics)):
+        values = [row[metric_key] for row in ranked_rows]
+        ax.barh(y_positions, values, color=colors[idx])
         ax.set_title(metric_label)
-        ax.set_xticks(x_positions)
-        ax.set_xticklabels(models, rotation=25, ha="right")
-        ax.set_ylim(0.0, 1.0)
-    axes[0].legend()
+        ax.set_xlim(0.0, 1.0)
+        ax.invert_yaxis()
+        if idx == 0:
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels(expert_labels)
+        else:
+            ax.set_yticks(y_positions)
+            ax.set_yticklabels([])
+
+    fig.suptitle(f"{projection} Expert Zero-Column Risk Ranking", y=0.995)
     fig.tight_layout()
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
@@ -339,11 +499,9 @@ def summarize_model(module_rows, expert_rows, layer_projection_rows):
             continue
         projection_summary[projection] = {
             "module_count": len(rows),
-            "mean_sparsity": mean([row["sparsity"] for row in rows]),
-            "mean_zero_row_ratio": mean([row["zero_row_ratio"] for row in rows]),
             "mean_zero_col_ratio": mean([row["zero_col_ratio"] for row in rows]),
-            "max_zero_row_ratio": max(row["zero_row_ratio"] for row in rows),
             "max_zero_col_ratio": max(row["zero_col_ratio"] for row in rows),
+            "collapse_incidence": collapse_incidence([row["zero_col_ratio"] for row in rows]),
         }
 
     return {
@@ -361,39 +519,39 @@ def analyze_single_model(model_path, output_root, dpi, max_pattern_plots, patter
     model_output_dir.mkdir(parents=True, exist_ok=True)
 
     model = load_model(model_path, trust_remote_code=trust_remote_code)
-    module_rows, module_weights = collect_module_rows(model, model_label)
+    module_rows = collect_module_rows(model, model_label)
     expert_rows = aggregate_expert_rows(module_rows)
     layer_projection_rows = aggregate_layer_projection_rows(module_rows)
+    depth_projection_rows = aggregate_layer_depth_projection_rows(module_rows)
+    expert_projection_rows = aggregate_expert_projection_rows(module_rows)
     summary = summarize_model(module_rows, expert_rows, layer_projection_rows)
 
     write_json(model_output_dir / "summary.json", summary)
     write_csv(model_output_dir / "per_module.csv", module_rows)
     write_csv(model_output_dir / "per_expert.csv", expert_rows)
     write_csv(model_output_dir / "per_layer_projection.csv", layer_projection_rows)
+    write_csv(model_output_dir / "per_depth_projection.csv", depth_projection_rows)
+    write_csv(model_output_dir / "per_expert_projection.csv", expert_projection_rows)
 
-    matrix, row_labels, col_labels = build_layer_projection_matrix(layer_projection_rows, "mean_sparsity")
+    matrix, row_labels, col_labels = build_layer_projection_matrix(layer_projection_rows, "mean_zero_col_ratio")
     if matrix:
         save_heatmap(
             matrix,
             row_labels,
             col_labels,
-            f"{model_label} layer x projection mean sparsity",
-            model_output_dir / "layer_projection_sparsity.png",
+            f"{model_label} layer x projection mean zero column ratio",
+            model_output_dir / "layer_projection_zero_col.png",
+            dpi=dpi,
+        )
+
+    if depth_projection_rows:
+        save_depth_projection_bar_plot(
+            depth_projection_rows,
+            model_output_dir / "shallow_mid_deep_projection_bar.png",
             dpi=dpi,
         )
 
     for projection in PROJECTION_ORDER:
-        matrix, row_labels, col_labels = build_projection_heatmap_rows(module_rows, projection, "sparsity")
-        if matrix:
-            save_heatmap(
-                matrix,
-                row_labels,
-                col_labels,
-                f"{model_label} {projection} sparsity",
-                model_output_dir / f"expert_sparsity_heatmap_{projection}.png",
-                dpi=dpi,
-            )
-
         matrix, row_labels, col_labels = build_projection_heatmap_rows(module_rows, projection, "zero_col_ratio")
         if matrix:
             save_heatmap(
@@ -401,30 +559,14 @@ def analyze_single_model(model_path, output_root, dpi, max_pattern_plots, patter
                 row_labels,
                 col_labels,
                 f"{model_label} {projection} zero column ratio",
-                model_output_dir / f"zero_col_ratio_heatmap_{projection}.png",
+                model_output_dir / f"expert_zero_col_heatmap_{projection}.png",
                 dpi=dpi,
             )
-
-        matrix, row_labels, col_labels = build_projection_heatmap_rows(module_rows, projection, "zero_row_ratio")
-        if matrix:
-            save_heatmap(
-                matrix,
-                row_labels,
-                col_labels,
-                f"{model_label} {projection} zero row ratio",
-                model_output_dir / f"zero_row_ratio_heatmap_{projection}.png",
-                dpi=dpi,
-            )
-
-    selected_rows = select_pattern_samples(module_rows, max_pattern_plots=max_pattern_plots)
-    for row in selected_rows:
-        weight = module_weights[row["module_name"]]
-        save_pattern_mask(
-            weight,
-            f"{model_label} {row['module_name']}",
-            model_output_dir / "weight_zero_pattern_samples" / f"{row['layer']:03d}_expert_{row['expert']:03d}_{row['projection']}.png",
+        save_expert_rank_plot(
+            expert_projection_rows,
+            projection,
+            model_output_dir / f"expert_collapse_rank_{projection}.png",
             dpi=dpi,
-            max_side=pattern_max_side,
         )
 
     del model
@@ -434,6 +576,8 @@ def analyze_single_model(model_path, output_root, dpi, max_pattern_plots, patter
         "module_rows": module_rows,
         "expert_rows": expert_rows,
         "layer_projection_rows": layer_projection_rows,
+        "depth_projection_rows": depth_projection_rows,
+        "expert_projection_rows": expert_projection_rows,
     }
 
 
@@ -447,6 +591,8 @@ def main():
     all_results = []
     all_layer_projection_rows = []
     all_module_rows = []
+    all_depth_projection_rows = []
+    all_expert_projection_rows = []
 
     for model_path in args.model:
         result = analyze_single_model(
@@ -460,15 +606,19 @@ def main():
         all_results.append({"model_label": result["model_label"], **result["summary"]})
         all_layer_projection_rows.extend(result["layer_projection_rows"])
         all_module_rows.extend(result["module_rows"])
+        all_depth_projection_rows.extend(result["depth_projection_rows"])
+        all_expert_projection_rows.extend(result["expert_projection_rows"])
 
     write_json(output_root / "combined_summary.json", all_results)
     write_csv(output_root / "combined_per_module.csv", all_module_rows)
     write_csv(output_root / "combined_per_layer_projection.csv", all_layer_projection_rows)
+    write_csv(output_root / "combined_per_depth_projection.csv", all_depth_projection_rows)
+    write_csv(output_root / "combined_per_expert_projection.csv", all_expert_projection_rows)
 
     if len(args.model) > 1 and all_layer_projection_rows:
         save_projection_summary_plot(
             all_layer_projection_rows,
-            output_root / "compare_models_projection_summary.png",
+            output_root / "compare_models_zero_col_summary.png",
             dpi=args.dpi,
         )
 

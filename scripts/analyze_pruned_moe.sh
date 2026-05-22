@@ -4,8 +4,10 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${PYTHON_BIN:-python}"
+export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
 
 # Edit these paths before running. Add more entries to compare multiple pruned models.
+# This script runs the static zero-column collapse analysis in debug/analyze_pruned_moe.py.
 model_paths=(
     "/path/to/pruned_model"
     # "/path/to/another_pruned_model"
@@ -13,9 +15,7 @@ model_paths=(
 
 output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/pruned_moe_analysis}"
 trust_remote_code="${TRUST_REMOTE_CODE:-1}"
-max_pattern_plots="${MAX_PATTERN_PLOTS:-9}"
 dpi="${DPI:-180}"
-pattern_max_side="${PATTERN_MAX_SIDE:-512}"
 
 if [ "${#model_paths[@]}" -eq 0 ]; then
     echo "No model paths configured. Edit model_paths in scripts/analyze_pruned_moe.sh."
@@ -35,9 +35,7 @@ cmd=(
     "$python_bin"
     "$repo_root/debug/analyze_pruned_moe.py"
     "--output-dir" "$output_dir"
-    "--max-pattern-plots" "$max_pattern_plots"
     "--dpi" "$dpi"
-    "--pattern-max-side" "$pattern_max_side"
 )
 
 if [ "$trust_remote_code" = "1" ]; then
@@ -48,7 +46,8 @@ for model_path in "${model_paths[@]}"; do
     cmd+=("--model" "$model_path")
 done
 
-echo "Writing analysis artifacts to: $output_dir"
+echo "Writing zero-column analysis artifacts to: $output_dir"
 printf 'Analyzing model: %s\n' "${model_paths[@]}"
+echo "Key outputs: layer_projection_zero_col.png, shallow_mid_deep_projection_bar.png, expert_zero_col_heatmap_*.png, expert_collapse_rank_*.png"
 
 "${cmd[@]}"
