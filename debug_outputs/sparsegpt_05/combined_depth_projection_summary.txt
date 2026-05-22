@@ -1,0 +1,15 @@
+Combined Depth x Projection Summary
+
++--------+---------+------------+---------+--------------+
+| model  | depth   | projection | modules | mean_sig_col |
++--------+---------+------------+---------+--------------+
+| ckpt_2 | shallow | gate_proj  | 480     | 0.0010       |
+| ckpt_2 | shallow | up_proj    | 480     | 0.0020       |
+| ckpt_2 | shallow | down_proj  | 480     | 0.0009       |
+| ckpt_2 | mid     | gate_proj  | 480     | 0.0001       |
+| ckpt_2 | mid     | up_proj    | 480     | 0.0004       |
+| ckpt_2 | mid     | down_proj  | 480     | 0.0007       |
+| ckpt_2 | deep    | gate_proj  | 480     | 0.0006       |
+| ckpt_2 | deep    | up_proj    | 480     | 0.0007       |
+| ckpt_2 | deep    | down_proj  | 480     | 0.0042       |
++--------+---------+------------+---------+--------------+

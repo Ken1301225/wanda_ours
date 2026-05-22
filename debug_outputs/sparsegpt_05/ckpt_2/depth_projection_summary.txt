@@ -1,0 +1,15 @@
+Depth x Projection Summary for ckpt_2
+
++---------+------------+---------+--------------+
+| depth   | projection | modules | mean_sig_col |
++---------+------------+---------+--------------+
+| shallow | gate_proj  | 480     | 0.0010       |
+| shallow | up_proj    | 480     | 0.0020       |
+| shallow | down_proj  | 480     | 0.0009       |
+| mid     | gate_proj  | 480     | 0.0001       |
+| mid     | up_proj    | 480     | 0.0004       |
+| mid     | down_proj  | 480     | 0.0007       |
+| deep    | gate_proj  | 480     | 0.0006       |
+| deep    | up_proj    | 480     | 0.0007       |
+| deep    | down_proj  | 480     | 0.0042       |
++---------+------------+---------+--------------+

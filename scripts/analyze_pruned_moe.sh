@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES='0'
+export CUDA_VISIBLE_DEVICES='1'
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${PYTHON_BIN:-python}"
 export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
@@ -10,11 +10,11 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-/tmp/matplotlib}"
 # Edit these paths before running. Add more entries to compare multiple pruned models.
 # This script runs the static zero-column collapse analysis in debug/analyze_pruned_moe.py.
 model_paths=(
-    "/data1/ldk/nlp/wanda_moe/ckpt_20260521_103933/"
+    "/data1/ldk/nlp/sparsegpt/ckpt_2/"
     # "/path/to/another_pruned_model"
 )
 
-output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/wanda_moe_05}"
+output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/sparsegpt_05}"
 trust_remote_code="${TRUST_REMOTE_CODE:-1}"
 dpi="${DPI:-180}"
 significant_threshold="${SIGNIFICANT_THRESHOLD:-0.8}"
