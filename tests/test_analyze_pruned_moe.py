@@ -61,6 +61,21 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
         self.assertAlmostEqual(stats["max_col_zero_fraction"], 4 / 5)
         self.assertAlmostEqual(stats["max_row_zero_fraction"], 1.0)
 
+    def test_compute_significant_zero_ratios_respects_exact_threshold_boundary(self):
+        weight = [
+            [0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0, 1.0],
+            [0.0, 0.0, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 1.0, 1.0],
+        ]
+
+        stats = compute_significant_zero_ratios(weight, significant_threshold=0.8)
+
+        self.assertAlmostEqual(stats["significant_zero_col_ratio"], 2 / 5)
+        self.assertAlmostEqual(stats["significant_zero_row_ratio"], 0.0)
+        self.assertAlmostEqual(stats["max_col_zero_fraction"], 0.8)
+
     def test_aggregate_layer_projection_rows_uses_significant_metrics(self):
         rows = [
             {

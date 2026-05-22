@@ -55,6 +55,31 @@ def matrix_to_nested_list(weight):
 
 
 def compute_significant_zero_ratios(weight, significant_threshold):
+    if hasattr(weight, "detach") and hasattr(weight, "shape"):
+        zero_mask = weight == 0
+        rows = int(weight.shape[0]) if weight.ndim >= 1 else 0
+        cols = int(weight.shape[1]) if weight.ndim >= 2 else 0
+        if rows == 0 or cols == 0:
+            return {
+                "sparsity": 0.0,
+                "significant_zero_col_ratio": 0.0,
+                "significant_zero_row_ratio": 0.0,
+                "max_col_zero_fraction": 0.0,
+                "max_row_zero_fraction": 0.0,
+            }
+
+        zero_mask_float = zero_mask.float()
+        row_zero_fractions = zero_mask_float.mean(dim=1)
+        col_zero_fractions = zero_mask_float.mean(dim=0)
+
+        return {
+            "sparsity": float(zero_mask_float.mean().item()),
+            "significant_zero_col_ratio": float((col_zero_fractions >= significant_threshold).float().mean().item()),
+            "significant_zero_row_ratio": float((row_zero_fractions >= significant_threshold).float().mean().item()),
+            "max_col_zero_fraction": float(col_zero_fractions.max().item()),
+            "max_row_zero_fraction": float(row_zero_fractions.max().item()),
+        }
+
     matrix = matrix_to_nested_list(weight)
     rows, cols = matrix_shape(matrix)
     if rows == 0 or cols == 0:
@@ -298,7 +323,7 @@ def collect_module_rows(model, model_label, significant_threshold):
         if parsed is None or not isinstance(module, nn.Linear):
             continue
 
-        weight = module.weight.detach().float().cpu()
+        weight = module.weight.detach()
         stats = compute_significant_zero_ratios(weight, significant_threshold=significant_threshold)
 
         row = {
@@ -314,12 +339,12 @@ def collect_module_rows(model, model_label, significant_threshold):
             "significant_zero_row_ratio": float(stats["significant_zero_row_ratio"]),
             "max_col_zero_fraction": float(stats["max_col_zero_fraction"]),
             "max_row_zero_fraction": float(stats["max_row_zero_fraction"]),
-            "mean_abs_weight": float(weight.abs().mean().item()),
+            "mean_abs_weight": float(weight.abs().float().mean().item()),
             "max_abs_weight": float(weight.abs().max().item()),
-            "l2_norm": float(weight.norm().item()),
+            "l2_norm": float(weight.float().norm().item()),
         }
         module_rows.append(row)
-        module_weights[name] = weight
+        module_weights[name] = weight.float().cpu()
 
     module_rows.sort(key=lambda row: (row["layer"], row["expert"], PROJECTION_ORDER.index(row["projection"])))
     return module_rows, module_weights
