@@ -26,6 +26,8 @@ def prepare_run_outputs(args):
     if not args.save:
         return
 
+    import torch
+
     os.makedirs(args.save, exist_ok=True)
     args.diagnostics_path = os.path.join(
         args.save, f"diagnostics_{args.prune_method}.jsonl"
