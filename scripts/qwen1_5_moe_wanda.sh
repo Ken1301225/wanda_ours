@@ -5,7 +5,7 @@ base_dir="/data1/data/kangborui/gujinrui/wanda"
 hf_home="$base_dir/huggingface"
 model_repo="Qwen/Qwen1.5-MoE-A2.7B"
 model="$hf_home/hub/models--Qwen--Qwen1.5-MoE-A2.7B"
-sparsity_ratio=0.75
+sparsity_ratio=0.5
 cuda_device=5
 seed=0
 

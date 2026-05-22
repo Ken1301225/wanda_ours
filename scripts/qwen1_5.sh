@@ -1,29 +1,18 @@
 #!/bin/bash
 
 # Set common variables
-base_dir="/data1/data/kangborui/gujinrui/wanda"
-hf_home="$base_dir/huggingface"
-model_repo="Qwen/Qwen1.5-MoE-A2.7B"
-model="$hf_home/hub/models--Qwen--Qwen1.5-MoE-A2.7B"
-sparsity_ratio=0.75
-cuda_device=5
+model="/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/"
+sparsity_ratio=0.3
+cuda_device=1
 seed=0
+timestamp=$(date +"%Y%m%d_%H%M%S")
 
 # Set CUDA device visibility
 # export CUDA_HOME=/data1/ldk/env/dkllm
 # export PATH=$CUDA_HOME/bin:$PATH
 export CUDA_VISIBLE_DEVICES=$cuda_device
-export HF_HOME="$hf_home"
-export HF_HUB_CACHE="$hf_home/hub"
-export HF_DATASETS_CACHE="$hf_home/datasets"
-
-mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$base_dir/output" "$base_dir/checkpoints"
-
-if [ ! -d "$model" ]; then
-    echo "Model cache not found: $model"
-    echo "Download with: huggingface-cli download $model_repo --local-dir $model"
-    exit 1
-fi
+export HF_DATASETS_CACHE="/data1/ldk/huggingface/datasets"
+export HF_HUB_CACHE="/data1/ldk/huggingface/hub"
 
 
 # Define function to run python command
@@ -42,8 +31,9 @@ run_python_command () {
 
 
 echo "Running with wanda pruning method"
-# run_python_command "wanda" "unstructured" "$base_dir/output/wanda" "$base_dir/checkpoints/wanda"
-# run_python_command "sparsegpt" "unstructured" "$base_dir/output/sparsegpt" "$base_dir/checkpoints/sparsegpt"
-run_python_command "ablate_wanda_seq" "unstructured" "$base_dir/output/ablate_wanda_seq" "$base_dir/checkpoints/ablate_wanda_seq"
+run_python_command "wanda" "unstructured" "/data1/ldk/nlp/wanda_moe/output_${timestamp}/" "/data1/ldk/nlp/wanda_moe/ckpt_${timestamp}/"
+# run_python_command "sparsegpt" "unstructured" "/data1/ldk/SPNN/qwen1_5/wanda/output9/" "/data1/ldk/SPNN/qwen1_5/wanda/ckpt9/"
+# run_python_command "ablate_wanda_seq" "unstructured" "/data1/ldk/SPNN/qwen1_5/wanda/output10/" "/data1/ldk/SPNN/qwen1_5/wanda/ckpt10/"
 # run_python_command "wanda" "unstructured" 
 echo "Finished wanda pruning method"
+
