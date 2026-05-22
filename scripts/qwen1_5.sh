@@ -41,9 +41,6 @@ run_python_command () {
 
 
 
-echo "Running with wanda pruning method"
-# run_python_command "wanda" "unstructured" "$base_dir/output/wanda" "$base_dir/checkpoints/wanda"
-# run_python_command "sparsegpt" "unstructured" "$base_dir/output/sparsegpt" "$base_dir/checkpoints/sparsegpt"
-run_python_command "ablate_wanda_seq" "unstructured" "$base_dir/output/ablate_wanda_seq" "$base_dir/checkpoints/ablate_wanda_seq"
-# run_python_command "wanda" "unstructured" 
-echo "Finished wanda pruning method"
+echo "Running with MoE-Wanda pruning method"
+run_python_command "moe_wanda" "unstructured" "$base_dir/output/moe_wanda" "$base_dir/checkpoints/moe_wanda"
+echo "Finished MoE-Wanda pruning method"

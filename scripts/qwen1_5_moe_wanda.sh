@@ -26,7 +26,7 @@ fi
 run_python_command () {
     python main.py \
     --model $model \
-    --prune_method wanda \
+    --prune_method moe_wanda \
     --sparsity_ratio $sparsity_ratio \
     --sparsity_type $1 \
     --seed $seed \
@@ -35,6 +35,6 @@ run_python_command () {
     --nsamples 128
 }
 
-echo "Running Qwen1.5 MoE Wanda pruning"
+echo "Running Qwen1.5 MoE-Wanda pruning"
 run_python_command "unstructured" "$base_dir/output/qwen1_5_moe_wanda" "$base_dir/checkpoints/qwen1_5_moe_wanda"
-echo "Finished Qwen1.5 MoE Wanda pruning"
+echo "Finished Qwen1.5 MoE-Wanda pruning"

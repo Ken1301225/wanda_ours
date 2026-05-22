@@ -30,11 +30,6 @@ run_python_command () {
 
 
 
-echo "Running with wanda pruning method"
-run_python_command "ablate_wanda_seq" "unstructured" "/data1/ldk/SPNN/deepseekv2/wanda/output12" "/data1/ldk/SPNN/deepseekv2/wanda/ckpt12" #10
-# run_python_command "wanda" "unstructured" "/data1/ldk/SPNN/deepseekv2/wanda/output11" "/data1/ldk/SPNN/deepseekv2/wanda/ckpt11"
-# run_python_command "sparsegpt" "unstructured" "/data1/ldk/SPNN/deepseekv2/wanda/sparsegpt/output8" "/data1/ldk/SPNN/deepseekv2/wanda/sparsegpt/ckpt8"
-# run_python_command "wanda" "unstructured" "/data1/ldk/SPNN/deepseekv2/wanda/output6" "/data1/ldk/SPNN/deepseekv2/wanda/ckpt6"
-# run_python_command "wanda" "unstructured" 
-echo "Finished wanda pruning method"
-
+echo "Running with MoE-Wanda pruning method"
+run_python_command "moe_wanda" "unstructured" "/data1/ldk/SPNN/deepseekv2/moe_wanda/output" "/data1/ldk/SPNN/deepseekv2/moe_wanda/ckpt"
+echo "Finished MoE-Wanda pruning method"

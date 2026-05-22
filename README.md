@@ -35,24 +35,25 @@ Compared to magnitude pruning which removes weights solely based on their magnit
 Installation instructions can be found in [INSTALL.md](INSTALL.md).
 
 ## Usage
-The [scripts](scripts) directory contains all the bash commands to replicate the main results (Table 2) in our paper.
+This fork is centered on MoE-Wanda pruning for MoE experts. The active entrypoints are [main.py](main.py) for Qwen-style MoE models and [main_dsv2.py](main_dsv2.py) for DeepSeek-V2-style MoE models.
+Legacy dense-model Wanda sections below are historical upstream material and are not the maintained path in this fork.
 
-Below is an example command for pruning LLaMA-7B with Wanda, to achieve unstructured 50% sparsity.
+Below is an example command for pruning Qwen1.5-MoE-A2.7B with MoE-Wanda, to achieve unstructured 50% sparsity on expert projections.
 ```sh
 python main.py \
-    --model decapoda-research/llama-7b-hf \
-    --prune_method wanda \
+    --model /path/to/Qwen1.5-MoE-A2.7B \
+    --prune_method moe_wanda \
     --sparsity_ratio 0.5 \
     --sparsity_type unstructured \
-    --save out/llama_7b/unstructured/wanda/ 
+    --save out/qwen1_5_moe/unstructured/moe_wanda/ 
 ```
 We provide a quick overview of the arguments:  
-- `--model`: The identifier for the LLaMA model on the Hugging Face model hub.
+- `--model`: The identifier or local snapshot path for the MoE model.
 - `--cache_dir`: Directory for loading or storing LLM weights. The default is `llm_weights`.
-- `--prune_method`: We have implemented three pruning methods, namely [`magnitude`, `wanda`, `sparsegpt`].
+- `--prune_method`: The active MoE pruning path is [`moe_wanda`].
 - `--sparsity_ratio`: Denotes the percentage of weights to be pruned.
 - `--sparsity_type`: Specifies the type of sparsity [`unstructured`, `2:4`, `4:8`].
-- `--use_variant`: Whether to use the Wanda variant, default is `False`. 
+- `--use_variant`: Whether to use the Wanda-style alpha search variant, default is `False`. 
 - `--save`: Specifies the directory where the result will be stored.
 
 For structured N:M sparsity, set the argument `--sparsity_type` to "2:4" or "4:8". An illustrative command is provided below:

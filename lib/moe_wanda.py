@@ -1,4 +1,10 @@
-import torch
+try:
+    import torch
+except ImportError:  # pragma: no cover - exercised only in lightweight test environments.
+    torch = None
+
+
+MOE_EXPERT_LINEAR_SUFFIXES = {"gate_proj", "up_proj", "down_proj"}
 
 
 def _resolve_submodule(module, path):
@@ -19,9 +25,20 @@ def _split_expert_name(name):
         return None, None, None
 
     parent_prefix, tail = name.split(expert_marker, 1)
+    if "." not in tail:
+        return None, None, None
     expert_idx, suffix = tail.split(".", 1)
     expert_prefix = f"{parent_prefix}{expert_marker}{expert_idx}"
     return parent_prefix, expert_prefix, suffix
+
+
+def is_moe_expert_linear(name):
+    _, expert_prefix, suffix = _split_expert_name(name)
+    return expert_prefix is not None and suffix in MOE_EXPERT_LINEAR_SUFFIXES
+
+
+def filter_moe_expert_linears(subset):
+    return {name: module for name, module in subset.items() if is_moe_expert_linear(name)}
 
 
 def _flatten_tokens(x):
@@ -296,14 +313,14 @@ def attach_moe_wanda_hooks(layer, subset):
     return collectors, groups, handles
 
 
-def build_moe_wanda_metric(layer, name, linear_module, collectors, groups, default_metric=None):
+def build_moe_wanda_metric(layer, name, linear_module, collectors, groups):
     parent_prefix, expert_prefix, suffix = _split_expert_name(name)
     if expert_prefix is None or expert_prefix not in collectors or parent_prefix not in groups:
-        return default_metric
+        return None
 
     total_tokens = groups[parent_prefix]["state"].total_tokens
     if total_tokens <= 0:
-        return default_metric
+        return None
 
     collector = collectors[expert_prefix]
     W = linear_module.weight.data.float().abs()
@@ -315,7 +332,7 @@ def build_moe_wanda_metric(layer, name, linear_module, collectors, groups, defau
 
     down_proj = _resolve_submodule(layer, f"{expert_prefix}.down_proj")
     if down_proj is None:
-        return default_metric
+        return None
     down_norm = torch.norm(down_proj.weight.data.float(), p=2, dim=0).to(linear_module.weight.device)
 
     if suffix == "up_proj":
@@ -326,7 +343,7 @@ def build_moe_wanda_metric(layer, name, linear_module, collectors, groups, defau
         moment = (collector.gate_joint_sum / denom).to(linear_module.weight.device).clamp_min_(0)
         return W * down_norm.reshape(-1, 1) * torch.sqrt(moment)
 
-    return default_metric
+    return None
 
 
 def build_moe_wanda_mask(layer, name, linear_module, collectors, groups, sparsity_ratio, prune_n=0, prune_m=0):

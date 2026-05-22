@@ -3,7 +3,6 @@ import heapq
 import torch 
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
-from .layerwrapper import WrappedGPT
 from .moe_wanda import attach_moe_wanda_hooks, build_moe_wanda_metric, build_moe_wanda_mask
 from .data import get_loaders 
 
@@ -127,7 +126,7 @@ def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune
 
             W[W_mask] = 0
 
-def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
+def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
 
@@ -146,32 +145,18 @@ def prune_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0
             dev = model.hf_device_map[f"model.layers.{i}"]
             inps, outs, attention_mask, position_ids= inps.to(dev), outs.to(dev), attention_mask.to(dev), position_ids.to(dev) 
 
-        wrapped_layers = {}
-        for name in subset:
-            wrapped_layers[name] = WrappedGPT(subset[name])
-
         moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(layer, subset)
-
-        def add_batch(name):
-            def tmp(_, inp, out):
-                wrapped_layers[name].add_batch(inp[0].data, out.data)
-            return tmp
-
-        handles = []
-        for name in wrapped_layers:
-            handles.append(subset[name].register_forward_hook(add_batch(name)))
         for j in range(args.nsamples):
             with torch.no_grad():
                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids)[0]
-        for h in handles:
-            h.remove()
         for h in moe_handles:
             h.remove()
 
         for name in subset:
             print(f"pruning layer {i} name {name}")
-            W_metric = torch.abs(subset[name].weight.data) * torch.sqrt(wrapped_layers[name].scaler_row.reshape((1,-1)))
-            W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups, default_metric=W_metric)
+            W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
+            if W_metric is None:
+                raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
 
             W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
             if prune_n != 0:
