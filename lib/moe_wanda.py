@@ -5,6 +5,8 @@ except ImportError:  # pragma: no cover - exercised only in lightweight test env
 
 
 MOE_EXPERT_LINEAR_SUFFIXES = {"gate_proj", "up_proj", "down_proj"}
+MOE_UPSTREAM_LINEAR_SUFFIXES = {"gate_proj", "up_proj"}
+MOE_DOWNSTREAM_LINEAR_SUFFIXES = {"down_proj"}
 
 
 def _resolve_submodule(module, path):
@@ -39,6 +41,22 @@ def is_moe_expert_linear(name):
 
 def filter_moe_expert_linears(subset):
     return {name: module for name, module in subset.items() if is_moe_expert_linear(name)}
+
+
+def split_moe_pruning_stages(subset):
+    upstream = {}
+    downstream = {}
+
+    for name, module in subset.items():
+        _, expert_prefix, suffix = _split_expert_name(name)
+        if expert_prefix is None:
+            continue
+        if suffix in MOE_UPSTREAM_LINEAR_SUFFIXES:
+            upstream[name] = module
+        elif suffix in MOE_DOWNSTREAM_LINEAR_SUFFIXES:
+            downstream[name] = module
+
+    return upstream, downstream
 
 
 def _flatten_tokens(x):
@@ -330,18 +348,13 @@ def build_moe_wanda_metric(layer, name, linear_module, collectors, groups):
         moment = (collector.down_joint_sum / denom).to(linear_module.weight.device).clamp_min_(0)
         return W * torch.sqrt(moment).reshape(1, -1)
 
-    down_proj = _resolve_submodule(layer, f"{expert_prefix}.down_proj")
-    if down_proj is None:
-        return None
-    down_norm = torch.norm(down_proj.weight.data.float(), p=2, dim=0).to(linear_module.weight.device)
-
     if suffix == "up_proj":
         moment = (collector.up_joint_sum / denom).to(linear_module.weight.device).clamp_min_(0)
-        return W * down_norm.reshape(-1, 1) * torch.sqrt(moment)
+        return W * torch.sqrt(moment)
 
     if suffix == "gate_proj":
         moment = (collector.gate_joint_sum / denom).to(linear_module.weight.device).clamp_min_(0)
-        return W * down_norm.reshape(-1, 1) * torch.sqrt(moment)
+        return W * torch.sqrt(moment)
 
     return None
 
