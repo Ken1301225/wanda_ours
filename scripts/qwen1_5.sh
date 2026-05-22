@@ -1,46 +1,31 @@
 #!/bin/bash
 
-# Set common variables
-base_dir="/data1/data/kangborui/gujinrui/wanda"
-hf_home="$base_dir/huggingface"
-model_repo="Qwen/Qwen1.5-MoE-A2.7B"
-model="$hf_home/hub/models--Qwen--Qwen1.5-MoE-A2.7B"
+model="/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/"
 sparsity_ratio=0.75
-cuda_device=5
+cuda_device=0
 seed=0
+timestamp=$(date +"%Y%m%d_%H%M%S")
 
-# Set CUDA device visibility
-# export CUDA_HOME=/data1/ldk/env/dkllm
-# export PATH=$CUDA_HOME/bin:$PATH
-export CUDA_VISIBLE_DEVICES=$cuda_device
-export HF_HOME="$hf_home"
-export HF_HUB_CACHE="$hf_home/hub"
-export HF_DATASETS_CACHE="$hf_home/datasets"
+export CUDA_VISIBLE_DEVICES="$cuda_device"
+export HF_DATASETS_CACHE="/data1/ldk/huggingface/datasets"
+export HF_HUB_CACHE="/data1/ldk/huggingface/hub"
 
-mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$base_dir/output" "$base_dir/checkpoints"
+output_dir="/data1/ldk/SPNN/qwen1_5/moe_wanda/output_${timestamp}/"
+checkpoint_dir="/data1/ldk/SPNN/qwen1_5/moe_wanda/ckpt_${timestamp}/"
+
+mkdir -p "$output_dir" "$checkpoint_dir"
 
 if [ ! -d "$model" ]; then
-    echo "Model cache not found: $model"
-    echo "Download with: huggingface-cli download $model_repo --local-dir $model"
+    echo "Model path not found: $model"
     exit 1
 fi
 
-
-# Define function to run python command
-run_python_command () {
-    python main.py \
-    --model $model \
-    --prune_method $1 \
-    --sparsity_ratio $sparsity_ratio \
-    --sparsity_type $2 \
-    --seed $seed \
-    --save $3 \
-    --save_model $4 \
+python main.py \
+    --model "$model" \
+    --prune_method moe_wanda \
+    --sparsity_ratio "$sparsity_ratio" \
+    --sparsity_type unstructured \
+    --seed "$seed" \
+    --save "$output_dir" \
+    --save_model "$checkpoint_dir" \
     --nsamples 128
-}
-
-
-
-echo "Running with MoE-Wanda pruning method"
-run_python_command "moe_wanda" "unstructured" "$base_dir/output/moe_wanda" "$base_dir/checkpoints/moe_wanda"
-echo "Finished MoE-Wanda pruning method"
