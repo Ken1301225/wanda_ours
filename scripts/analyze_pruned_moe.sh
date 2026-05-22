@@ -16,6 +16,7 @@ model_paths=(
 output_dir="${OUTPUT_DIR:-$repo_root/debug_outputs/pruned_moe_analysis}"
 trust_remote_code="${TRUST_REMOTE_CODE:-1}"
 dpi="${DPI:-180}"
+significant_threshold="${SIGNIFICANT_THRESHOLD:-0.8}"
 
 if [ "${#model_paths[@]}" -eq 0 ]; then
     echo "No model paths configured. Edit model_paths in scripts/analyze_pruned_moe.sh."
@@ -36,6 +37,7 @@ cmd=(
     "$repo_root/debug/analyze_pruned_moe.py"
     "--output-dir" "$output_dir"
     "--dpi" "$dpi"
+    "--significant-threshold" "$significant_threshold"
 )
 
 if [ "$trust_remote_code" = "1" ]; then
@@ -46,8 +48,9 @@ for model_path in "${model_paths[@]}"; do
     cmd+=("--model" "$model_path")
 done
 
-echo "Writing zero-column analysis artifacts to: $output_dir"
+echo "Writing significant sparse-structure analysis artifacts to: $output_dir"
 printf 'Analyzing model: %s\n' "${model_paths[@]}"
-echo "Key outputs: layer_projection_zero_col.png, shallow_mid_deep_projection_bar.png, expert_zero_col_heatmap_*.png, expert_collapse_rank_*.png"
+echo "Using significant sparse threshold: $significant_threshold"
+echo "Key outputs: summary.txt, depth_projection_summary.txt, layer_projection_significant_zero_col.png, expert_significant_zero_col_heatmap_*.png, weight_overview_heatmap.png"
 
 "${cmd[@]}"

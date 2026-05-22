@@ -1,20 +1,19 @@
 import unittest
 
 from debug.analyze_pruned_moe import (
-    aggregate_expert_rows,
     aggregate_expert_projection_rows,
-    aggregate_layer_projection_rows,
     aggregate_layer_depth_projection_rows,
+    aggregate_layer_projection_rows,
     build_parser,
-    build_ranked_expert_projection_rows,
-    build_twilight_palette,
+    compute_significant_zero_ratios,
+    format_ascii_table,
     parse_expert_module_name,
-    select_pattern_samples,
+    select_weight_overview_rows,
 )
 
 
 class AnalyzePrunedMoeTests(unittest.TestCase):
-    def test_parser_accepts_multiple_models(self):
+    def test_parser_accepts_multiple_models_and_threshold(self):
         parser = build_parser()
 
         args = parser.parse_args(
@@ -30,7 +29,7 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
 
         self.assertEqual(args.model, ["/tmp/model_a", "/tmp/model_b"])
         self.assertEqual(args.output_dir, "/tmp/out")
-        self.assertEqual(args.max_pattern_plots, 9)
+        self.assertAlmostEqual(args.significant_threshold, 0.8)
 
     def test_parse_expert_module_name(self):
         parsed = parse_expert_module_name("model.layers.7.mlp.experts.13.down_proj")
@@ -45,154 +44,139 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
         )
         self.assertIsNone(parse_expert_module_name("model.layers.7.self_attn.q_proj"))
 
-    def test_aggregate_expert_rows(self):
-        rows = [
-            {
-                "model_label": "model_a",
-                "layer": 0,
-                "expert": 0,
-                "projection": "gate_proj",
-                "sparsity": 0.5,
-                "zero_row_ratio": 0.25,
-                "zero_col_ratio": 0.10,
-            },
-            {
-                "model_label": "model_a",
-                "layer": 0,
-                "expert": 0,
-                "projection": "up_proj",
-                "sparsity": 0.75,
-                "zero_row_ratio": 0.50,
-                "zero_col_ratio": 0.20,
-            },
+    def test_compute_significant_zero_ratios(self):
+        weight = [
+            [0.0, 1.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 1.0, 1.0],
+            [0.0, 0.0, 0.0, 0.0, 0.0],
+            [1.0, 0.0, 1.0, 1.0, 1.0],
         ]
 
-        aggregated = aggregate_expert_rows(rows)
+        stats = compute_significant_zero_ratios(weight, significant_threshold=0.8)
 
-        self.assertEqual(len(aggregated), 1)
-        self.assertEqual(aggregated[0]["projection_count"], 2)
-        self.assertAlmostEqual(aggregated[0]["mean_sparsity"], 0.625)
-        self.assertAlmostEqual(aggregated[0]["max_zero_col_ratio"], 0.20)
+        self.assertAlmostEqual(stats["sparsity"], 14 / 25)
+        self.assertAlmostEqual(stats["significant_zero_col_ratio"], 3 / 5)
+        self.assertAlmostEqual(stats["significant_zero_row_ratio"], 1 / 5)
+        self.assertAlmostEqual(stats["max_col_zero_fraction"], 4 / 5)
+        self.assertAlmostEqual(stats["max_row_zero_fraction"], 1.0)
 
-    def test_aggregate_layer_projection_rows(self):
+    def test_aggregate_layer_projection_rows_uses_significant_metrics(self):
         rows = [
             {
                 "model_label": "model_a",
                 "layer": 0,
                 "expert": 0,
                 "projection": "down_proj",
-                "sparsity": 0.5,
-                "zero_row_ratio": 0.0,
-                "zero_col_ratio": 0.1,
+                "significant_zero_col_ratio": 0.25,
+                "significant_zero_row_ratio": 0.10,
             },
             {
                 "model_label": "model_a",
                 "layer": 0,
                 "expert": 1,
                 "projection": "down_proj",
-                "sparsity": 0.75,
-                "zero_row_ratio": 0.2,
-                "zero_col_ratio": 0.4,
+                "significant_zero_col_ratio": 0.75,
+                "significant_zero_row_ratio": 0.50,
             },
         ]
 
         aggregated = aggregate_layer_projection_rows(rows)
 
         self.assertEqual(len(aggregated), 1)
-        self.assertAlmostEqual(aggregated[0]["mean_sparsity"], 0.625)
-        self.assertAlmostEqual(aggregated[0]["max_zero_row_ratio"], 0.2)
         self.assertEqual(aggregated[0]["expert_count"], 2)
+        self.assertAlmostEqual(aggregated[0]["mean_significant_zero_col_ratio"], 0.5)
+        self.assertAlmostEqual(aggregated[0]["max_significant_zero_row_ratio"], 0.5)
 
     def test_aggregate_layer_depth_projection_rows_splits_shallow_mid_deep(self):
         rows = [
-            {"model_label": "model_a", "layer": 0, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.1},
-            {"model_label": "model_a", "layer": 1, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.2},
-            {"model_label": "model_a", "layer": 2, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.3},
-            {"model_label": "model_a", "layer": 3, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.4},
-            {"model_label": "model_a", "layer": 4, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.5},
-            {"model_label": "model_a", "layer": 5, "expert": 0, "projection": "gate_proj", "zero_col_ratio": 0.6},
+            {"model_label": "model_a", "layer": 0, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.1},
+            {"model_label": "model_a", "layer": 1, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.2},
+            {"model_label": "model_a", "layer": 2, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.3},
+            {"model_label": "model_a", "layer": 3, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.4},
+            {"model_label": "model_a", "layer": 4, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.5},
+            {"model_label": "model_a", "layer": 5, "expert": 0, "projection": "gate_proj", "significant_zero_col_ratio": 0.6},
         ]
 
         aggregated = aggregate_layer_depth_projection_rows(rows)
 
         self.assertEqual([row["depth_bucket"] for row in aggregated], ["shallow", "mid", "deep"])
         self.assertEqual([row["module_count"] for row in aggregated], [2, 2, 2])
-        self.assertAlmostEqual(aggregated[0]["mean_zero_col_ratio"], 0.15)
-        self.assertAlmostEqual(aggregated[1]["mean_zero_col_ratio"], 0.35)
-        self.assertAlmostEqual(aggregated[2]["mean_zero_col_ratio"], 0.55)
+        self.assertAlmostEqual(aggregated[0]["mean_significant_zero_col_ratio"], 0.15)
+        self.assertAlmostEqual(aggregated[1]["mean_significant_zero_col_ratio"], 0.35)
+        self.assertAlmostEqual(aggregated[2]["mean_significant_zero_col_ratio"], 0.55)
 
-    def test_aggregate_expert_projection_rows_computes_zero_col_metrics(self):
+    def test_aggregate_expert_projection_rows_computes_significant_metrics(self):
         rows = [
-            {"model_label": "model_a", "layer": 0, "expert": 1, "projection": "up_proj", "zero_col_ratio": 0.0},
-            {"model_label": "model_a", "layer": 1, "expert": 1, "projection": "up_proj", "zero_col_ratio": 0.5},
-            {"model_label": "model_a", "layer": 2, "expert": 1, "projection": "up_proj", "zero_col_ratio": 0.25},
+            {
+                "model_label": "model_a",
+                "layer": 0,
+                "expert": 1,
+                "projection": "up_proj",
+                "significant_zero_col_ratio": 0.0,
+                "significant_zero_row_ratio": 0.0,
+            },
+            {
+                "model_label": "model_a",
+                "layer": 1,
+                "expert": 1,
+                "projection": "up_proj",
+                "significant_zero_col_ratio": 0.5,
+                "significant_zero_row_ratio": 0.25,
+            },
+            {
+                "model_label": "model_a",
+                "layer": 2,
+                "expert": 1,
+                "projection": "up_proj",
+                "significant_zero_col_ratio": 0.25,
+                "significant_zero_row_ratio": 0.5,
+            },
         ]
 
         aggregated = aggregate_expert_projection_rows(rows)
 
         self.assertEqual(len(aggregated), 1)
         self.assertEqual(aggregated[0]["layer_count"], 3)
-        self.assertAlmostEqual(aggregated[0]["mean_zero_col_ratio"], 0.25)
-        self.assertAlmostEqual(aggregated[0]["max_zero_col_ratio"], 0.5)
-        self.assertAlmostEqual(aggregated[0]["collapse_incidence"], 2 / 3)
+        self.assertAlmostEqual(aggregated[0]["mean_significant_zero_col_ratio"], 0.25)
+        self.assertAlmostEqual(aggregated[0]["max_significant_zero_col_ratio"], 0.5)
+        self.assertAlmostEqual(aggregated[0]["significant_col_collapse_incidence"], 2 / 3)
+        self.assertAlmostEqual(aggregated[0]["mean_significant_zero_row_ratio"], 0.25)
+        self.assertAlmostEqual(aggregated[0]["significant_row_collapse_incidence"], 2 / 3)
 
-    def test_build_ranked_expert_projection_rows_sorts_by_mean_zero_col_ratio(self):
+    def test_format_ascii_table(self):
+        table = format_ascii_table(
+            rows=[
+                {"projection": "gate_proj", "mean": 0.125, "max": 0.5},
+                {"projection": "down_proj", "mean": 0.250, "max": 0.75},
+            ],
+            columns=[
+                ("projection", "projection"),
+                ("mean", "mean"),
+                ("max", "max"),
+            ],
+            float_precision=3,
+        )
+
+        self.assertIn("| projection | mean  | max   |", table)
+        self.assertIn("| gate_proj  | 0.125 | 0.500 |", table)
+        self.assertIn("| down_proj  | 0.250 | 0.750 |", table)
+
+    def test_select_weight_overview_rows_prefers_highest_significant_zero_col_ratio(self):
         rows = [
-            {"model_label": "model_a", "expert": 2, "projection": "down_proj", "mean_zero_col_ratio": 0.2},
-            {"model_label": "model_a", "expert": 1, "projection": "down_proj", "mean_zero_col_ratio": 0.4},
-            {"model_label": "model_a", "expert": 0, "projection": "down_proj", "mean_zero_col_ratio": 0.1},
+            {"layer": 0, "expert": 1, "projection": "gate_proj", "significant_zero_col_ratio": 0.2},
+            {"layer": 1, "expert": 2, "projection": "gate_proj", "significant_zero_col_ratio": 0.7},
+            {"layer": 2, "expert": 3, "projection": "gate_proj", "significant_zero_col_ratio": 0.3},
+            {"layer": 3, "expert": 4, "projection": "up_proj", "significant_zero_col_ratio": 0.4},
+            {"layer": 4, "expert": 5, "projection": "up_proj", "significant_zero_col_ratio": 0.9},
+            {"layer": 5, "expert": 6, "projection": "down_proj", "significant_zero_col_ratio": 0.8},
         ]
 
-        ranked = build_ranked_expert_projection_rows(rows, "down_proj")
+        selected = select_weight_overview_rows(rows)
 
-        self.assertEqual([row["expert"] for row in ranked], [1, 2, 0])
-
-    def test_build_twilight_palette_returns_requested_number_of_colors(self):
-        palette = build_twilight_palette(3)
-
-        self.assertEqual(len(palette), 3)
-        self.assertTrue(all(len(color) in (3, 4) for color in palette))
-
-    def test_select_pattern_samples_balances_projections(self):
-        rows = [
-            {
-                "model_label": "model_a",
-                "module_name": "model.layers.0.mlp.experts.0.gate_proj",
-                "projection": "gate_proj",
-                "zero_col_ratio": 0.4,
-                "zero_row_ratio": 0.1,
-                "sparsity": 0.5,
-            },
-            {
-                "model_label": "model_a",
-                "module_name": "model.layers.0.mlp.experts.0.up_proj",
-                "projection": "up_proj",
-                "zero_col_ratio": 0.3,
-                "zero_row_ratio": 0.2,
-                "sparsity": 0.6,
-            },
-            {
-                "model_label": "model_a",
-                "module_name": "model.layers.0.mlp.experts.0.down_proj",
-                "projection": "down_proj",
-                "zero_col_ratio": 0.2,
-                "zero_row_ratio": 0.8,
-                "sparsity": 0.7,
-            },
-            {
-                "model_label": "model_a",
-                "module_name": "model.layers.1.mlp.experts.1.down_proj",
-                "projection": "down_proj",
-                "zero_col_ratio": 0.9,
-                "zero_row_ratio": 0.1,
-                "sparsity": 0.8,
-            },
-        ]
-
-        selected = select_pattern_samples(rows, max_pattern_plots=3)
-
-        self.assertEqual(len(selected), 3)
-        self.assertEqual({row["projection"] for row in selected}, {"gate_proj", "up_proj", "down_proj"})
+        self.assertEqual(selected[("shallow", "gate_proj")]["expert"], 2)
+        self.assertEqual(selected[("deep", "up_proj")]["expert"], 5)
+        self.assertEqual(selected[("deep", "down_proj")]["expert"], 6)
 
 
 if __name__ == "__main__":
