@@ -1,10 +1,12 @@
 import unittest
 
 from debug.analyze_pruned_moe import (
+    aggregate_projection_overlap_rows,
     aggregate_expert_projection_rows,
     aggregate_layer_depth_projection_rows,
     aggregate_layer_projection_rows,
     build_parser,
+    compute_mask_overlap_metrics,
     compute_significant_zero_ratios,
     format_ascii_table,
     parse_expert_module_name,
@@ -18,6 +20,8 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
 
         args = parser.parse_args(
             [
+                "--reference-model",
+                "/tmp/reference_model",
                 "--model",
                 "/tmp/model_a",
                 "--model",
@@ -27,6 +31,7 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
             ]
         )
 
+        self.assertEqual(args.reference_model, "/tmp/reference_model")
         self.assertEqual(args.model, ["/tmp/model_a", "/tmp/model_b"])
         self.assertEqual(args.output_dir, "/tmp/out")
         self.assertAlmostEqual(args.significant_threshold, 0.8)
@@ -75,6 +80,52 @@ class AnalyzePrunedMoeTests(unittest.TestCase):
         self.assertAlmostEqual(stats["significant_zero_col_ratio"], 2 / 5)
         self.assertAlmostEqual(stats["significant_zero_row_ratio"], 0.0)
         self.assertAlmostEqual(stats["max_col_zero_fraction"], 0.8)
+
+    def test_compute_mask_overlap_metrics(self):
+        reference_weight = [
+            [0.0, 1.0, 0.0],
+            [1.0, 0.0, 1.0],
+        ]
+        candidate_weight = [
+            [0.0, 1.0, 1.0],
+            [1.0, 0.0, 0.0],
+        ]
+
+        metrics = compute_mask_overlap_metrics(reference_weight, candidate_weight)
+
+        self.assertAlmostEqual(metrics["reference_zero_ratio"], 0.5)
+        self.assertAlmostEqual(metrics["candidate_zero_ratio"], 0.5)
+        self.assertAlmostEqual(metrics["mask_match_ratio"], 4 / 6)
+        self.assertAlmostEqual(metrics["pruned_overlap_ratio"], 2 / 6)
+        self.assertAlmostEqual(metrics["pruned_jaccard"], 2 / 4)
+
+    def test_aggregate_projection_overlap_rows(self):
+        rows = [
+            {
+                "model_label": "new_model",
+                "reference_label": "old_model",
+                "projection": "down_proj",
+                "mask_match_ratio": 0.8,
+                "pruned_overlap_ratio": 0.4,
+                "pruned_jaccard": 0.5,
+            },
+            {
+                "model_label": "new_model",
+                "reference_label": "old_model",
+                "projection": "down_proj",
+                "mask_match_ratio": 0.6,
+                "pruned_overlap_ratio": 0.2,
+                "pruned_jaccard": 0.25,
+            },
+        ]
+
+        aggregated = aggregate_projection_overlap_rows(rows)
+
+        self.assertEqual(len(aggregated), 1)
+        self.assertEqual(aggregated[0]["module_count"], 2)
+        self.assertAlmostEqual(aggregated[0]["mean_mask_match_ratio"], 0.7)
+        self.assertAlmostEqual(aggregated[0]["mean_pruned_overlap_ratio"], 0.3)
+        self.assertAlmostEqual(aggregated[0]["mean_pruned_jaccard"], 0.375)
 
     def test_aggregate_layer_projection_rows_uses_significant_metrics(self):
         rows = [

@@ -13,6 +13,7 @@ TWILIGHT_CMAP = "twilight"
 
 def build_parser():
     parser = argparse.ArgumentParser(description="Analyze significant sparse rows and columns in pruned MoE expert weights.")
+    parser.add_argument("--reference-model", help="Optional reference pruned model directory for pairwise MoE mask-overlap analysis.")
     parser.add_argument("--model", action="append", required=True, help="Path to a pruned model directory. Repeat for multiple models.")
     parser.add_argument("--output-dir", required=True, help="Directory where analysis artifacts will be written.")
     parser.add_argument("--trust-remote-code", action="store_true", default=True, help="Load models with trust_remote_code=True.")
@@ -114,6 +115,70 @@ def compute_significant_zero_ratios(weight, significant_threshold):
         "significant_zero_row_ratio": significant_zero_row_ratio,
         "max_col_zero_fraction": max(col_zero_fractions),
         "max_row_zero_fraction": max(row_zero_fractions),
+    }
+
+
+def compute_mask_overlap_metrics(reference_weight, candidate_weight):
+    if hasattr(reference_weight, "detach") and hasattr(candidate_weight, "detach"):
+        if tuple(reference_weight.shape) != tuple(candidate_weight.shape):
+            raise ValueError(f"Shape mismatch for overlap comparison: {tuple(reference_weight.shape)} vs {tuple(candidate_weight.shape)}")
+
+        reference_zero = reference_weight == 0
+        candidate_zero = candidate_weight == 0
+        intersection = (reference_zero & candidate_zero).float()
+        union = (reference_zero | candidate_zero).float()
+        union_ratio = float(union.mean().item())
+        return {
+            "reference_zero_ratio": float(reference_zero.float().mean().item()),
+            "candidate_zero_ratio": float(candidate_zero.float().mean().item()),
+            "mask_match_ratio": float((reference_zero == candidate_zero).float().mean().item()),
+            "pruned_overlap_ratio": float(intersection.mean().item()),
+            "pruned_jaccard": float(intersection.sum().item() / union.sum().item()) if union_ratio > 0 else 1.0,
+        }
+
+    reference_matrix = matrix_to_nested_list(reference_weight)
+    candidate_matrix = matrix_to_nested_list(candidate_weight)
+    if matrix_shape(reference_matrix) != matrix_shape(candidate_matrix):
+        raise ValueError(f"Shape mismatch for overlap comparison: {matrix_shape(reference_matrix)} vs {matrix_shape(candidate_matrix)}")
+
+    rows, cols = matrix_shape(reference_matrix)
+    if rows == 0 or cols == 0:
+        return {
+            "reference_zero_ratio": 0.0,
+            "candidate_zero_ratio": 0.0,
+            "mask_match_ratio": 1.0,
+            "pruned_overlap_ratio": 0.0,
+            "pruned_jaccard": 1.0,
+        }
+
+    total = rows * cols
+    reference_zero_count = 0
+    candidate_zero_count = 0
+    match_count = 0
+    pruned_overlap_count = 0
+    pruned_union_count = 0
+
+    for row_idx in range(rows):
+        for col_idx in range(cols):
+            reference_zero = reference_matrix[row_idx][col_idx] == 0
+            candidate_zero = candidate_matrix[row_idx][col_idx] == 0
+            if reference_zero:
+                reference_zero_count += 1
+            if candidate_zero:
+                candidate_zero_count += 1
+            if reference_zero == candidate_zero:
+                match_count += 1
+            if reference_zero and candidate_zero:
+                pruned_overlap_count += 1
+            if reference_zero or candidate_zero:
+                pruned_union_count += 1
+
+    return {
+        "reference_zero_ratio": reference_zero_count / total,
+        "candidate_zero_ratio": candidate_zero_count / total,
+        "mask_match_ratio": match_count / total,
+        "pruned_overlap_ratio": pruned_overlap_count / total,
+        "pruned_jaccard": (pruned_overlap_count / pruned_union_count) if pruned_union_count else 1.0,
     }
 
 
@@ -254,6 +319,75 @@ def aggregate_projection_summary_rows(module_rows):
     return aggregated
 
 
+def aggregate_layer_projection_overlap_rows(overlap_rows):
+    grouped = defaultdict(list)
+    for row in overlap_rows:
+        key = (row["model_label"], row["reference_label"], row["layer"], row["projection"])
+        grouped[key].append(row)
+
+    aggregated = []
+    for (model_label, reference_label, layer, projection), rows in sorted(grouped.items()):
+        aggregated.append(
+            {
+                "model_label": model_label,
+                "reference_label": reference_label,
+                "layer": layer,
+                "projection": projection,
+                "module_count": len(rows),
+                "mean_mask_match_ratio": mean([row["mask_match_ratio"] for row in rows]),
+                "mean_pruned_overlap_ratio": mean([row["pruned_overlap_ratio"] for row in rows]),
+                "mean_pruned_jaccard": mean([row["pruned_jaccard"] for row in rows]),
+            }
+        )
+    return aggregated
+
+
+def aggregate_depth_projection_overlap_rows(overlap_rows):
+    annotated_rows = annotate_depth_buckets(overlap_rows)
+    grouped = defaultdict(list)
+    for row in annotated_rows:
+        key = (row["model_label"], row["reference_label"], row["depth_bucket"], row["projection"])
+        grouped[key].append(row)
+
+    aggregated = []
+    for (model_label, reference_label, depth_bucket, projection), rows in sorted(grouped.items()):
+        aggregated.append(
+            {
+                "model_label": model_label,
+                "reference_label": reference_label,
+                "depth_bucket": depth_bucket,
+                "projection": projection,
+                "module_count": len(rows),
+                "mean_mask_match_ratio": mean([row["mask_match_ratio"] for row in rows]),
+                "mean_pruned_overlap_ratio": mean([row["pruned_overlap_ratio"] for row in rows]),
+                "mean_pruned_jaccard": mean([row["pruned_jaccard"] for row in rows]),
+            }
+        )
+    return aggregated
+
+
+def aggregate_projection_overlap_rows(overlap_rows):
+    grouped = defaultdict(list)
+    for row in overlap_rows:
+        key = (row["model_label"], row["reference_label"], row["projection"])
+        grouped[key].append(row)
+
+    aggregated = []
+    for (model_label, reference_label, projection), rows in sorted(grouped.items()):
+        aggregated.append(
+            {
+                "model_label": model_label,
+                "reference_label": reference_label,
+                "projection": projection,
+                "module_count": len(rows),
+                "mean_mask_match_ratio": mean([row["mask_match_ratio"] for row in rows]),
+                "mean_pruned_overlap_ratio": mean([row["pruned_overlap_ratio"] for row in rows]),
+                "mean_pruned_jaccard": mean([row["pruned_jaccard"] for row in rows]),
+            }
+        )
+    return aggregated
+
+
 def build_ranked_expert_projection_rows(expert_projection_rows, projection):
     ranked = [row for row in expert_projection_rows if row["projection"] == projection]
     return sorted(
@@ -348,6 +482,40 @@ def collect_module_rows(model, model_label, significant_threshold):
 
     module_rows.sort(key=lambda row: (row["layer"], row["expert"], PROJECTION_ORDER.index(row["projection"])))
     return module_rows, module_weights
+
+
+def collect_mask_overlap_rows(reference_rows, reference_weights, candidate_rows, candidate_weights, reference_label, candidate_label):
+    reference_by_name = {row["module_name"]: row for row in reference_rows}
+    candidate_by_name = {row["module_name"]: row for row in candidate_rows}
+    shared_names = sorted(set(reference_by_name).intersection(candidate_by_name))
+    if not shared_names:
+        raise ValueError("No shared MoE expert linear modules were found between reference and candidate models.")
+
+    overlap_rows = []
+    for module_name in shared_names:
+        reference_row = reference_by_name[module_name]
+        candidate_row = candidate_by_name[module_name]
+        metrics = compute_mask_overlap_metrics(reference_weights[module_name], candidate_weights[module_name])
+        overlap_rows.append(
+            {
+                "model_label": candidate_label,
+                "reference_label": reference_label,
+                "module_name": module_name,
+                "layer": candidate_row["layer"],
+                "expert": candidate_row["expert"],
+                "projection": candidate_row["projection"],
+                "rows": candidate_row["rows"],
+                "cols": candidate_row["cols"],
+                "reference_zero_ratio": metrics["reference_zero_ratio"],
+                "candidate_zero_ratio": metrics["candidate_zero_ratio"],
+                "mask_match_ratio": metrics["mask_match_ratio"],
+                "pruned_overlap_ratio": metrics["pruned_overlap_ratio"],
+                "pruned_jaccard": metrics["pruned_jaccard"],
+            }
+        )
+
+    overlap_rows.sort(key=lambda row: (row["layer"], row["expert"], PROJECTION_ORDER.index(row["projection"])))
+    return overlap_rows
 
 
 def ensure_parent(path):
@@ -476,6 +644,40 @@ def save_depth_projection_bar_plot(depth_projection_rows, path, dpi):
     ax.set_title("Significant Zero Column Ratio by Layer Depth and Projection")
     ax.set_xticks(x_positions)
     ax.set_xticklabels(PROJECTION_ORDER, rotation=20)
+    ax.set_ylim(0.0, 1.0)
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path, dpi=dpi, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_overlap_summary_plot(projection_overlap_rows, path, dpi):
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    ensure_parent(path)
+    models = sorted({row["model_label"] for row in projection_overlap_rows})
+    colors = build_twilight_palette(len(PROJECTION_ORDER))
+
+    fig, ax = plt.subplots(figsize=(12, 5))
+    width = 0.8 / max(1, len(PROJECTION_ORDER))
+    x_positions = list(range(len(models)))
+    for offset, projection in enumerate(PROJECTION_ORDER):
+        values = []
+        for model in models:
+            matched = [
+                row["mean_pruned_jaccard"]
+                for row in projection_overlap_rows
+                if row["model_label"] == model and row["projection"] == projection
+            ]
+            values.append(mean(matched))
+        xs = [x + (offset - (len(PROJECTION_ORDER) - 1) / 2) * width for x in x_positions]
+        ax.bar(xs, values, width=width, label=projection, color=colors[offset])
+    ax.set_title("Mean Pruned-Mask Jaccard by Model and Projection")
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(models, rotation=25, ha="right")
     ax.set_ylim(0.0, 1.0)
     ax.legend()
     fig.tight_layout()
@@ -707,10 +909,90 @@ def analyze_single_model(model_path, output_root, dpi, significant_threshold, tr
     return {
         "model_label": model_label,
         "module_rows": module_rows,
+        "module_weights": module_weights,
         "layer_projection_rows": layer_projection_rows,
         "depth_projection_rows": depth_projection_rows,
         "expert_projection_rows": expert_projection_rows,
         "projection_summary_rows": projection_summary_rows,
+    }
+
+
+def analyze_pairwise_overlap(reference_result, candidate_result, output_root, dpi):
+    candidate_output_dir = Path(output_root) / candidate_result["model_label"]
+    overlap_rows = collect_mask_overlap_rows(
+        reference_result["module_rows"],
+        reference_result["module_weights"],
+        candidate_result["module_rows"],
+        candidate_result["module_weights"],
+        reference_result["model_label"],
+        candidate_result["model_label"],
+    )
+    projection_overlap_rows = aggregate_projection_overlap_rows(overlap_rows)
+    depth_projection_overlap_rows = aggregate_depth_projection_overlap_rows(overlap_rows)
+    layer_projection_overlap_rows = aggregate_layer_projection_overlap_rows(overlap_rows)
+
+    write_ascii_report(
+        candidate_output_dir / "mask_overlap_summary.txt",
+        f"Mask Overlap Summary for {candidate_result['model_label']} vs {reference_result['model_label']}",
+        projection_overlap_rows,
+        columns=[
+            ("reference_label", "reference"),
+            ("projection", "projection"),
+            ("module_count", "modules"),
+            ("mean_mask_match_ratio", "mean_match"),
+            ("mean_pruned_overlap_ratio", "mean_overlap"),
+            ("mean_pruned_jaccard", "mean_jaccard"),
+        ],
+    )
+    write_ascii_report(
+        candidate_output_dir / "depth_projection_mask_overlap_summary.txt",
+        f"Depth x Projection Mask Overlap for {candidate_result['model_label']} vs {reference_result['model_label']}",
+        depth_projection_overlap_rows,
+        columns=[
+            ("reference_label", "reference"),
+            ("depth_bucket", "depth"),
+            ("projection", "projection"),
+            ("module_count", "modules"),
+            ("mean_mask_match_ratio", "mean_match"),
+            ("mean_pruned_jaccard", "mean_jaccard"),
+        ],
+    )
+
+    matrix, row_labels, col_labels = build_layer_projection_matrix(
+        layer_projection_overlap_rows,
+        "mean_pruned_jaccard",
+    )
+    if matrix:
+        save_heatmap(
+            matrix,
+            row_labels,
+            col_labels,
+            f"{candidate_result['model_label']} vs {reference_result['model_label']} layer x projection mask jaccard",
+            candidate_output_dir / "layer_projection_mask_overlap.png",
+            dpi=dpi,
+        )
+
+    for projection in PROJECTION_ORDER:
+        matrix, row_labels, col_labels = build_projection_heatmap_rows(
+            overlap_rows,
+            projection,
+            "pruned_jaccard",
+        )
+        if matrix:
+            save_heatmap(
+                matrix,
+                row_labels,
+                col_labels,
+                f"{candidate_result['model_label']} vs {reference_result['model_label']} {projection} mask jaccard",
+                candidate_output_dir / f"expert_mask_overlap_heatmap_{projection}.png",
+                dpi=dpi,
+            )
+
+    return {
+        "overlap_rows": overlap_rows,
+        "projection_overlap_rows": projection_overlap_rows,
+        "depth_projection_overlap_rows": depth_projection_overlap_rows,
+        "layer_projection_overlap_rows": layer_projection_overlap_rows,
     }
 
 
@@ -725,6 +1007,19 @@ def main():
     all_depth_projection_rows = []
     all_expert_projection_rows = []
     all_projection_summary_rows = []
+    all_projection_overlap_rows = []
+    all_depth_projection_overlap_rows = []
+
+    reference_result = None
+    if args.reference_model:
+        reference_result = analyze_single_model(
+            model_path=args.reference_model,
+            output_root=output_root,
+            dpi=args.dpi,
+            significant_threshold=args.significant_threshold,
+            trust_remote_code=args.trust_remote_code,
+            weight_max_side=args.weight_max_side,
+        )
 
     for model_path in args.model:
         result = analyze_single_model(
@@ -739,6 +1034,15 @@ def main():
         all_depth_projection_rows.extend(result["depth_projection_rows"])
         all_expert_projection_rows.extend(result["expert_projection_rows"])
         all_projection_summary_rows.extend(result["projection_summary_rows"])
+        if reference_result is not None and result["model_label"] != reference_result["model_label"]:
+            overlap_result = analyze_pairwise_overlap(
+                reference_result=reference_result,
+                candidate_result=result,
+                output_root=output_root,
+                dpi=args.dpi,
+            )
+            all_projection_overlap_rows.extend(overlap_result["projection_overlap_rows"])
+            all_depth_projection_overlap_rows.extend(overlap_result["depth_projection_overlap_rows"])
 
     write_ascii_report(
         output_root / "combined_summary.txt",
@@ -791,6 +1095,41 @@ def main():
         save_projection_summary_plot(
             all_projection_summary_rows,
             output_root / "compare_models_significant_zero_col_summary.png",
+            dpi=args.dpi,
+        )
+
+    if all_projection_overlap_rows:
+        write_ascii_report(
+            output_root / "combined_mask_overlap_summary.txt",
+            "Combined Mask Overlap Summary",
+            all_projection_overlap_rows,
+            columns=[
+                ("model_label", "model"),
+                ("reference_label", "reference"),
+                ("projection", "projection"),
+                ("module_count", "modules"),
+                ("mean_mask_match_ratio", "mean_match"),
+                ("mean_pruned_overlap_ratio", "mean_overlap"),
+                ("mean_pruned_jaccard", "mean_jaccard"),
+            ],
+        )
+        write_ascii_report(
+            output_root / "combined_depth_projection_mask_overlap_summary.txt",
+            "Combined Depth x Projection Mask Overlap Summary",
+            all_depth_projection_overlap_rows,
+            columns=[
+                ("model_label", "model"),
+                ("reference_label", "reference"),
+                ("depth_bucket", "depth"),
+                ("projection", "projection"),
+                ("module_count", "modules"),
+                ("mean_mask_match_ratio", "mean_match"),
+                ("mean_pruned_jaccard", "mean_jaccard"),
+            ],
+        )
+        save_overlap_summary_plot(
+            all_projection_overlap_rows,
+            output_root / "compare_models_mask_overlap_summary.png",
             dpi=args.dpi,
         )
 
