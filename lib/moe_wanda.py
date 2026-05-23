@@ -5,8 +5,6 @@ except ImportError:  # pragma: no cover - exercised only in lightweight test env
 
 
 MOE_EXPERT_LINEAR_SUFFIXES = {"gate_proj", "up_proj", "down_proj"}
-MOE_UPSTREAM_LINEAR_SUFFIXES = {"gate_proj", "up_proj"}
-MOE_DOWNSTREAM_LINEAR_SUFFIXES = {"down_proj"}
 
 
 def _resolve_submodule(module, path):
@@ -42,21 +40,72 @@ def is_moe_expert_linear(name):
 def filter_moe_expert_linears(subset):
     return {name: module for name, module in subset.items() if is_moe_expert_linear(name)}
 
+def apply_column_zero_ratio_guard(W_mask, W_metric, max_zero_ratio):
+    if max_zero_ratio >= 1.0:
+        return W_mask
+    if max_zero_ratio < 0.0:
+        raise ValueError(f"max_zero_ratio must be in [0, 1], got {max_zero_ratio}")
 
-def split_moe_pruning_stages(subset):
-    upstream = {}
-    downstream = {}
+    rows, cols = W_mask.shape
+    if rows == 0 or cols == 0:
+        return W_mask
 
-    for name, module in subset.items():
-        _, expert_prefix, suffix = _split_expert_name(name)
-        if expert_prefix is None:
+    max_pruned_per_col = int(rows * max_zero_ratio + 1e-9)
+    guarded_mask = W_mask.clone()
+    pruned_counts = guarded_mask.sum(dim=0).tolist()
+    released_count = 0
+
+    for col_idx in range(cols):
+        excess = pruned_counts[col_idx] - max_pruned_per_col
+        if excess <= 0:
             continue
-        if suffix in MOE_UPSTREAM_LINEAR_SUFFIXES:
-            upstream[name] = module
-        elif suffix in MOE_DOWNSTREAM_LINEAR_SUFFIXES:
-            downstream[name] = module
 
-    return upstream, downstream
+        pruned_rows = torch.where(guarded_mask[:, col_idx])[0]
+        pruned_scores = W_metric[pruned_rows, col_idx]
+        rows_to_keep = pruned_rows[torch.topk(pruned_scores, excess, largest=True)[1]]
+        guarded_mask[rows_to_keep, col_idx] = False
+        pruned_counts[col_idx] -= excess
+        released_count += excess
+
+    if released_count == 0:
+        return guarded_mask
+
+    candidate_positions = []
+    for col_idx in range(cols):
+        capacity = max_pruned_per_col - pruned_counts[col_idx]
+        if capacity <= 0:
+            continue
+
+        kept_rows = torch.where(~guarded_mask[:, col_idx])[0]
+        if kept_rows.numel() == 0:
+            continue
+
+        kept_scores = W_metric[kept_rows, col_idx]
+        take = min(capacity, kept_rows.numel())
+        chosen = torch.topk(kept_scores, take, largest=False)[1]
+        for idx in chosen.tolist():
+            row_idx = int(kept_rows[idx].item())
+            candidate_positions.append((float(kept_scores[idx].item()), row_idx, col_idx))
+
+    candidate_positions.sort(key=lambda item: item[0])
+    repruned = 0
+    for _, row_idx, col_idx in candidate_positions:
+        if repruned >= released_count:
+            break
+        if guarded_mask[row_idx, col_idx]:
+            continue
+        if pruned_counts[col_idx] >= max_pruned_per_col:
+            continue
+        guarded_mask[row_idx, col_idx] = True
+        pruned_counts[col_idx] += 1
+        repruned += 1
+
+    if repruned != released_count:
+        raise ValueError(
+            f"Column zero-ratio guard is infeasible for mask shape {tuple(W_mask.shape)} at max_zero_ratio={max_zero_ratio}"
+        )
+
+    return guarded_mask
 
 
 def _flatten_tokens(x):

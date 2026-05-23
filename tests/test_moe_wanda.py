@@ -2,10 +2,10 @@ import types
 import unittest
 
 from lib.moe_wanda import (
+    apply_column_zero_ratio_guard,
     build_moe_wanda_metric,
     filter_moe_expert_linears,
     is_moe_expert_linear,
-    split_moe_pruning_stages,
 )
 
 try:
@@ -61,32 +61,29 @@ class MoeWandaTests(unittest.TestCase):
             },
         )
 
-    def test_split_moe_pruning_stages_separates_upstream_and_downstream(self):
-        subset = {
-            "mlp.experts.0.gate_proj": object(),
-            "mlp.experts.0.up_proj": object(),
-            "mlp.experts.0.down_proj": object(),
-            "mlp.experts.1.up_proj": object(),
-            "mlp.experts.1.down_proj": object(),
-        }
-
-        upstream, downstream = split_moe_pruning_stages(subset)
-
-        self.assertEqual(
-            set(upstream),
-            {
-                "mlp.experts.0.gate_proj",
-                "mlp.experts.0.up_proj",
-                "mlp.experts.1.up_proj",
-            },
+    @unittest.skipIf(torch is None, "torch is not installed in the current test runtime")
+    def test_apply_column_zero_ratio_guard_limits_column_collapse_and_preserves_total_pruned(self):
+        metric = torch.tensor(
+            [
+                [1.0, 5.0, 0.1, 0.2],
+                [1.1, 5.1, 0.3, 0.4],
+                [1.2, 5.2, 0.5, 0.6],
+                [1.3, 5.3, 0.7, 0.8],
+            ]
         )
-        self.assertEqual(
-            set(downstream),
-            {
-                "mlp.experts.0.down_proj",
-                "mlp.experts.1.down_proj",
-            },
+        mask = torch.tensor(
+            [
+                [True, True, False, False],
+                [True, True, False, False],
+                [True, True, False, False],
+                [True, True, False, False],
+            ]
         )
+
+        guarded = apply_column_zero_ratio_guard(mask, metric, max_zero_ratio=0.5)
+
+        self.assertEqual(int(guarded.sum().item()), int(mask.sum().item()))
+        self.assertEqual(sorted(guarded.sum(dim=0).tolist()), [2, 2, 2, 2])
 
     @unittest.skipIf(torch is None, "torch is not installed in the current test runtime")
     def test_build_moe_wanda_metric_returns_none_for_non_expert_modules(self):

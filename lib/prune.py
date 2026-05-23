@@ -4,7 +4,7 @@ import json
 import torch 
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
-from .moe_wanda import attach_moe_wanda_hooks, build_moe_wanda_mask, build_moe_wanda_metric, filter_moe_expert_linears, split_moe_pruning_stages
+from .moe_wanda import apply_column_zero_ratio_guard, attach_moe_wanda_hooks, build_moe_wanda_mask, build_moe_wanda_metric, filter_moe_expert_linears
 from .data import get_loaders 
 
 from .ablate import AblateGPT 
@@ -192,50 +192,64 @@ def _collect_moe_wanda_stats(layer, subset, inps, args, attention_mask=None, pos
     return moe_collectors, moe_groups
 
 
-def _apply_moe_wanda_pruning_stage(layer, subset, collectors, groups, args, prune_n=0, prune_m=0, stage_name=None):
+def _build_moe_wanda_mask(name, W_metric, args, prune_n=0, prune_m=0):
+    W_mask = (torch.zeros_like(W_metric) == 1)
+    if prune_n != 0:
+        for ii in range(W_metric.shape[1]):
+            if ii % prune_m == 0:
+                tmp = W_metric[:, ii:(ii + prune_m)].float()
+                W_mask.scatter_(1, ii + torch.topk(tmp, prune_n, dim=1, largest=False)[1], True)
+    else:
+        sort_res = torch.sort(W_metric, dim=-1, stable=True)
+
+        if args.use_variant:
+            tmp_metric = torch.cumsum(sort_res[0], dim=1)
+            sum_before = W_metric.sum(dim=1)
+
+            alpha = 0.4
+            alpha_hist = [0.0, 0.8]
+            W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+            while (torch.abs(cur_sparsity - args.sparsity_ratio) > 0.001) and (alpha_hist[1] - alpha_hist[0] >= 0.001):
+                if cur_sparsity > args.sparsity_ratio:
+                    alpha_new = (alpha + alpha_hist[0]) / 2.0
+                    alpha_hist[1] = alpha
+                else:
+                    alpha_new = (alpha + alpha_hist[1]) / 2.0
+                    alpha_hist[0] = alpha
+
+                alpha = alpha_new
+                W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+            print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
+        else:
+            indices = sort_res[1][:, :int(W_metric.shape[1] * args.sparsity_ratio)]
+            W_mask.scatter_(1, indices, True)
+
+    if (
+        prune_n == 0
+        and name.endswith("down_proj")
+        and getattr(args, "down_proj_max_col_zero_ratio", 1.0) < 1.0
+    ):
+        W_mask = apply_column_zero_ratio_guard(
+            W_mask,
+            W_metric,
+            max_zero_ratio=args.down_proj_max_col_zero_ratio,
+        )
+    return W_mask
+
+
+def _apply_moe_wanda_pruning(layer, subset, collectors, groups, args, prune_n=0, prune_m=0):
     module_diagnostics = []
 
     for name in subset:
-        print(f"pruning stage {stage_name or 'single'} name {name}")
+        print(f"pruning name {name}")
         weight = subset[name].weight.data
         W_metric = build_moe_wanda_metric(layer, name, subset[name], collectors, groups)
         if W_metric is None:
             raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
 
-        W_mask = (torch.zeros_like(W_metric) == 1)
-        if prune_n != 0:
-            for ii in range(W_metric.shape[1]):
-                if ii % prune_m == 0:
-                    tmp = W_metric[:, ii:(ii + prune_m)].float()
-                    W_mask.scatter_(1, ii + torch.topk(tmp, prune_n, dim=1, largest=False)[1], True)
-        else:
-            sort_res = torch.sort(W_metric, dim=-1, stable=True)
-
-            if args.use_variant:
-                tmp_metric = torch.cumsum(sort_res[0], dim=1)
-                sum_before = W_metric.sum(dim=1)
-
-                alpha = 0.4
-                alpha_hist = [0.0, 0.8]
-                W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                while (torch.abs(cur_sparsity - args.sparsity_ratio) > 0.001) and (alpha_hist[1] - alpha_hist[0] >= 0.001):
-                    if cur_sparsity > args.sparsity_ratio:
-                        alpha_new = (alpha + alpha_hist[0]) / 2.0
-                        alpha_hist[1] = alpha
-                    else:
-                        alpha_new = (alpha + alpha_hist[1]) / 2.0
-                        alpha_hist[0] = alpha
-
-                    alpha = alpha_new
-                    W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
-            else:
-                indices = sort_res[1][:, :int(W_metric.shape[1] * args.sparsity_ratio)]
-                W_mask.scatter_(1, indices, True)
+        W_mask = _build_moe_wanda_mask(name, W_metric, args, prune_n=prune_n, prune_m=prune_m)
 
         module_diag = _collect_mask_diagnostics(name, weight, W_mask, W_metric)
-        if stage_name is not None:
-            module_diag["stage"] = stage_name
         subset[name].weight.data[W_mask] = 0
         _finalize_weight_diagnostics(module_diag, subset[name].weight.data)
         module_diagnostics.append(module_diag)
@@ -378,7 +392,6 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
     for i in range(len(layers)):
         layer = layers[i]
         subset = filter_moe_expert_linears(find_layers(layer))
-        upstream_subset, downstream_subset = split_moe_pruning_stages(subset)
 
         if f"model.layers.{i}" in model.hf_device_map:   ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
@@ -395,43 +408,15 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             outs=outs,
         )
 
-        module_diagnostics = []
-        module_diagnostics.extend(
-            _apply_moe_wanda_pruning_stage(
-                layer,
-                upstream_subset,
-                moe_collectors,
-                moe_groups,
-                args,
-                prune_n=prune_n,
-                prune_m=prune_m,
-                stage_name="upstream",
-            )
+        module_diagnostics = _apply_moe_wanda_pruning(
+            layer,
+            subset,
+            moe_collectors,
+            moe_groups,
+            args,
+            prune_n=prune_n,
+            prune_m=prune_m,
         )
-
-        if downstream_subset:
-            staged_collectors, staged_groups = _collect_moe_wanda_stats(
-                layer,
-                subset,
-                inps,
-                args,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                position_embeddings=position_embeddings,
-                outs=None,
-            )
-            module_diagnostics.extend(
-                _apply_moe_wanda_pruning_stage(
-                    layer,
-                    downstream_subset,
-                    staged_collectors,
-                    staged_groups,
-                    args,
-                    prune_n=prune_n,
-                    prune_m=prune_m,
-                    stage_name="downstream",
-                )
-            )
 
         delta_rms, base_rms, relative_delta_rms = _layer_delta_stats(
             layer,

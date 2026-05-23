@@ -4,6 +4,7 @@ model="/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c
 sparsity_ratio=0.75
 cuda_device=0
 seed=0
+down_proj_max_col_zero_ratio=0.8
 timestamp=$(date +"%Y%m%d_%H%M%S")
 
 export CUDA_VISIBLE_DEVICES="$cuda_device"
@@ -26,6 +27,7 @@ python main.py \
     --sparsity_ratio "$sparsity_ratio" \
     --sparsity_type unstructured \
     --seed "$seed" \
+    --down_proj_max_col_zero_ratio "$down_proj_max_col_zero_ratio" \
     --save "$output_dir" \
     --save_model "$checkpoint_dir" \
     --nsamples 128

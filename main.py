@@ -103,6 +103,12 @@ def build_parser():
         action="store_true",
         help="whether to use the wanda variant described in the appendix",
     )
+    parser.add_argument(
+        "--down_proj_max_col_zero_ratio",
+        type=float,
+        default=0.8,
+        help="For down_proj only, cap the per-column zero ratio after pruning to reduce column collapse. Set to 1.0 to disable.",
+    )
     parser.add_argument("--save", type=str, default=None, help="Path to save results.")
     parser.add_argument(
         "--save_model", type=str, default=None, help="Path to save the pruned model."
