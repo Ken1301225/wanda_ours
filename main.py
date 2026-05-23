@@ -3,6 +3,8 @@ import json
 import os
 from importlib.metadata import version
 
+import torch
+
 
 def append_run_diagnostic(args, payload):
     diagnostics_path = getattr(args, "diagnostics_path", None)
