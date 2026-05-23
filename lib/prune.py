@@ -237,11 +237,14 @@ def _build_moe_wanda_mask(name, W_metric, args, prune_n=0, prune_m=0):
     return W_mask
 
 
-def _apply_moe_wanda_pruning(layer, subset, collectors, groups, args, prune_n=0, prune_m=0):
+def _apply_moe_wanda_pruning(layer, subset, collectors, groups, args, prune_n=0, prune_m=0, layer_index=None, total_layers=None):
     module_diagnostics = []
 
-    for name in subset:
-        print(f"pruning name {name}")
+    for module_idx, name in enumerate(subset, start=1):
+        if layer_index is not None and total_layers is not None:
+            print(f"pruning layer {layer_index + 1}/{total_layers} module {module_idx}/{len(subset)} name {name}")
+        else:
+            print(f"pruning module {module_idx}/{len(subset)} name {name}")
         weight = subset[name].weight.data
         W_metric = build_moe_wanda_metric(layer, name, subset[name], collectors, groups)
         if W_metric is None:
@@ -392,6 +395,7 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
     for i in range(len(layers)):
         layer = layers[i]
         subset = filter_moe_expert_linears(find_layers(layer))
+        print(f"collecting MoE-Wanda statistics for layer {i + 1}/{len(layers)} ({len(subset)} modules)")
 
         if f"model.layers.{i}" in model.hf_device_map:   ## handle the case for llama-30B and llama-65B, when the device map has multiple GPUs;
             dev = model.hf_device_map[f"model.layers.{i}"]
@@ -416,6 +420,8 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             args,
             prune_n=prune_n,
             prune_m=prune_m,
+            layer_index=i,
+            total_layers=len(layers),
         )
 
         delta_rms, base_rms, relative_delta_rms = _layer_delta_stats(

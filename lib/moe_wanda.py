@@ -50,60 +50,46 @@ def apply_column_zero_ratio_guard(W_mask, W_metric, max_zero_ratio):
     if rows == 0 or cols == 0:
         return W_mask
 
-    max_pruned_per_col = int(rows * max_zero_ratio + 1e-9)
+    device = W_mask.device
     guarded_mask = W_mask.clone()
-    pruned_counts = guarded_mask.sum(dim=0).tolist()
-    released_count = 0
-
-    for col_idx in range(cols):
-        excess = pruned_counts[col_idx] - max_pruned_per_col
-        if excess <= 0:
-            continue
-
-        pruned_rows = torch.where(guarded_mask[:, col_idx])[0]
-        pruned_scores = W_metric[pruned_rows, col_idx]
-        rows_to_keep = pruned_rows[torch.topk(pruned_scores, excess, largest=True)[1]]
-        guarded_mask[rows_to_keep, col_idx] = False
-        pruned_counts[col_idx] -= excess
-        released_count += excess
+    max_pruned_per_col = int(rows * max_zero_ratio + 1e-9)
+    pruned_counts = W_mask.sum(dim=0)
+    excess = (pruned_counts - max_pruned_per_col).clamp_min(0)
+    released_count = int(excess.sum().item())
 
     if released_count == 0:
         return guarded_mask
 
-    candidate_positions = []
-    for col_idx in range(cols):
-        capacity = max_pruned_per_col - pruned_counts[col_idx]
-        if capacity <= 0:
-            continue
+    row_ids = torch.arange(rows, device=device, dtype=torch.long).unsqueeze(1).expand(rows, cols)
 
-        kept_rows = torch.where(~guarded_mask[:, col_idx])[0]
-        if kept_rows.numel() == 0:
-            continue
+    pruned_scores = torch.where(guarded_mask, W_metric, torch.full_like(W_metric, float("-inf")))
+    pruned_order = torch.argsort(pruned_scores, dim=0, descending=True)
+    pruned_rank = torch.empty_like(pruned_order)
+    pruned_rank.scatter_(0, pruned_order, row_ids)
+    release_mask = guarded_mask & (pruned_rank < excess.unsqueeze(0))
+    guarded_mask = guarded_mask & ~release_mask
 
-        kept_scores = W_metric[kept_rows, col_idx]
-        take = min(capacity, kept_rows.numel())
-        chosen = torch.topk(kept_scores, take, largest=False)[1]
-        for idx in chosen.tolist():
-            row_idx = int(kept_rows[idx].item())
-            candidate_positions.append((float(kept_scores[idx].item()), row_idx, col_idx))
+    pruned_counts = guarded_mask.sum(dim=0)
+    capacity = (max_pruned_per_col - pruned_counts).clamp_min(0)
+    selectable_kept = (~guarded_mask) & (capacity.unsqueeze(0) > 0)
 
-    candidate_positions.sort(key=lambda item: item[0])
-    repruned = 0
-    for _, row_idx, col_idx in candidate_positions:
-        if repruned >= released_count:
-            break
-        if guarded_mask[row_idx, col_idx]:
-            continue
-        if pruned_counts[col_idx] >= max_pruned_per_col:
-            continue
-        guarded_mask[row_idx, col_idx] = True
-        pruned_counts[col_idx] += 1
-        repruned += 1
+    kept_scores = torch.where(selectable_kept, W_metric, torch.full_like(W_metric, float("inf")))
+    kept_order = torch.argsort(kept_scores, dim=0)
+    kept_rank = torch.empty_like(kept_order)
+    kept_rank.scatter_(0, kept_order, row_ids)
+    selectable_mask = selectable_kept & (kept_rank < capacity.unsqueeze(0))
 
-    if repruned != released_count:
+    flat_scores = torch.where(selectable_mask, W_metric, torch.full_like(W_metric, float("inf"))).reshape(-1)
+    reprune_scores, reprune_indices = torch.topk(flat_scores, k=released_count, largest=False)
+
+    if not torch.isfinite(reprune_scores).all():
         raise ValueError(
             f"Column zero-ratio guard is infeasible for mask shape {tuple(W_mask.shape)} at max_zero_ratio={max_zero_ratio}"
         )
+
+    reprune_mask = torch.zeros_like(guarded_mask, dtype=torch.bool).reshape(-1)
+    reprune_mask[reprune_indices] = True
+    guarded_mask = guarded_mask | reprune_mask.reshape(rows, cols)
 
     return guarded_mask
 
