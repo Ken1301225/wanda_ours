@@ -18,10 +18,15 @@ class TokenizerWrapper:
 
 
 def _default_hf_hub_cache():
-    return os.environ.get(
-        "HF_HUB_CACHE",
-        os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"),
-    )
+    hf_hub_cache = os.environ.get("HF_HUB_CACHE")
+    if hf_hub_cache:
+        return hf_hub_cache
+
+    hf_cache_root = os.environ.get("HF_CACHE_ROOT")
+    if hf_cache_root:
+        return os.path.join(hf_cache_root, "hub")
+
+    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
 
 
 def _find_local_dataset_files(dataset_repo, pattern):
