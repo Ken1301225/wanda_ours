@@ -3,9 +3,9 @@
 set -euo pipefail
 
 # Edit these shared roots to match your environment.
-MODEL_ROOT="${MODEL_ROOT:-/path/to/model}"
-HF_CACHE_ROOT="${HF_CACHE_ROOT:-/path/to/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/path/to/experiments/qwen1_5/moe_wanda}"
+MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
+HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/qwen1_5/moe_wanda}"
 
 model="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
 sparsity_ratio="${SPARSITY_RATIO:-0.75}"

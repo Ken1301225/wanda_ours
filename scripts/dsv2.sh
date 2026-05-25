@@ -3,9 +3,9 @@
 set -euo pipefail
 
 # Edit these shared roots to match your environment.
-MODEL_ROOT="${MODEL_ROOT:-/path/to/model}"
-HF_CACHE_ROOT="${HF_CACHE_ROOT:-/path/to/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/path/to/experiments/deepseekv2/moe_wanda}"
+MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/huggingface/hub}"
+HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/deepseekv2/moe_wanda}"
 
 # Keep paths without trailing '/' to avoid dynamic-module cache key collisions.
 model="${MODEL:-${MODEL_ROOT}/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0}"

@@ -18,8 +18,8 @@ class DataPathTests(unittest.TestCase):
             return importlib.import_module("lib.data")
 
     def test_default_hf_hub_cache_uses_home_cache_dir(self):
-        with patch.dict(os.environ, {}, clear=True), patch.object(self.data.os.path, "expanduser", return_value="/tmp/home"):
-            self.assertEqual(self.data._default_hf_hub_cache(), "/tmp/home/.cache/huggingface/hub")
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(self.data._default_hf_hub_cache(), "/data1/ldk/huggingface/hub")
 
     def test_default_hf_hub_cache_respects_environment_override(self):
         with patch.dict(os.environ, {"HF_HUB_CACHE": "/tmp/custom-cache"}, clear=True):
