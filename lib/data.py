@@ -26,7 +26,7 @@ def _default_hf_hub_cache():
     if hf_cache_root:
         return os.path.join(hf_cache_root, "hub")
 
-    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+    return "/data1/ldk/huggingface/hub"
 
 
 def _find_local_dataset_files(dataset_repo, pattern):
