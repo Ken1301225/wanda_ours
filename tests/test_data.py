@@ -24,3 +24,7 @@ class DataPathTests(unittest.TestCase):
     def test_default_hf_hub_cache_respects_environment_override(self):
         with patch.dict(os.environ, {"HF_HUB_CACHE": "/tmp/custom-cache"}, clear=True):
             self.assertEqual(self.data._default_hf_hub_cache(), "/tmp/custom-cache")
+
+    def test_default_hf_hub_cache_uses_cache_root_when_available(self):
+        with patch.dict(os.environ, {"HF_CACHE_ROOT": "/tmp/hf-cache-root"}, clear=True):
+            self.assertEqual(self.data._default_hf_hub_cache(), "/tmp/hf-cache-root/hub")
