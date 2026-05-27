@@ -5,16 +5,16 @@ set -euo pipefail
 # Edit these shared roots to match your environment.
 MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/qwen1_5/moe_wanda}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_dense_soft}"
 
 MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
 MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
-SPARSITY_RATIO="${SPARSITY_RATIO:-0.75}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
 CUDA_DEVICE="${CUDA_DEVICE:-0}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-128}"
 ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
-ROUTING_POWER="${ROUTING_POWER:-2.0}"
+ROUTING_POWER="${ROUTING_POWER:-1.0}"
 OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt}"
 
