@@ -17,8 +17,20 @@ class TokenizerWrapper:
         self.input_ids = input_ids
 
 
+def _default_hf_hub_cache():
+    hf_hub_cache = os.environ.get("HF_HUB_CACHE")
+    if hf_hub_cache:
+        return hf_hub_cache
+
+    hf_cache_root = os.environ.get("HF_CACHE_ROOT")
+    if hf_cache_root:
+        return os.path.join(hf_cache_root, "hub")
+
+    return "/data1/ldk/huggingface/hub"
+
+
 def _find_local_dataset_files(dataset_repo, pattern):
-    hub_cache = os.environ.get("HF_HUB_CACHE", "/data1/ldk/huggingface/hub")
+    hub_cache = _default_hf_hub_cache()
     cache_repo = f"datasets--{dataset_repo.replace('/', '--')}"
     search_pattern = os.path.join(hub_cache, cache_repo, "snapshots", "*", pattern)
     return sorted(glob.glob(search_pattern))
