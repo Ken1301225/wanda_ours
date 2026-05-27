@@ -1,6 +1,10 @@
-from main import build_parser as build_main_parser
-from main_dsv2 import build_parser as build_dsv2_parser
+import json
+import tempfile
 import unittest
+from pathlib import Path
+
+from main import build_parser as build_main_parser, prepare_run_outputs
+from main_dsv2 import build_parser as build_dsv2_parser
 
 
 class MainCliTests(unittest.TestCase):
@@ -36,3 +40,87 @@ class MainCliTests(unittest.TestCase):
                         "wanda",
                     ]
                 )
+
+    def test_parser_accepts_dense_softmax_routing_mode(self):
+        for build_parser in (build_main_parser, build_dsv2_parser):
+            parser = build_parser()
+
+            args = parser.parse_args(
+                [
+                    "--model",
+                    "dummy",
+                    "--sparsity_type",
+                    "unstructured",
+                    "--prune_method",
+                    "moe_wanda",
+                    "--moe_wanda_routing_mode",
+                    "dense_softmax",
+                ]
+            )
+
+            self.assertEqual(args.moe_wanda_routing_mode, "dense_softmax")
+
+    def test_parser_accepts_moe_wanda_routing_power(self):
+        for build_parser in (build_main_parser, build_dsv2_parser):
+            parser = build_parser()
+
+            args = parser.parse_args(
+                [
+                    "--model",
+                    "dummy",
+                    "--sparsity_type",
+                    "unstructured",
+                    "--prune_method",
+                    "moe_wanda",
+                    "--moe_wanda_routing_power",
+                    "1.0",
+                ]
+            )
+
+            self.assertEqual(args.moe_wanda_routing_power, 1.0)
+
+    def test_prepare_run_outputs_writes_routing_settings(self):
+        parser = build_main_parser()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            args = parser.parse_args(
+                [
+                    "--model",
+                    "dummy",
+                    "--sparsity_type",
+                    "unstructured",
+                    "--prune_method",
+                    "moe_wanda",
+                    "--save",
+                    tmpdir,
+                    "--moe_wanda_routing_mode",
+                    "dense_softmax",
+                    "--moe_wanda_routing_power",
+                    "1.0",
+                ]
+            )
+
+            prepare_run_outputs(args)
+
+            diagnostics_path = Path(tmpdir) / "diagnostics_moe_wanda.jsonl"
+            summary_path = Path(tmpdir) / "diagnostics_moe_wanda.txt"
+            self.assertTrue(diagnostics_path.exists())
+            self.assertTrue(summary_path.exists())
+
+            run_start = json.loads(diagnostics_path.read_text().strip())
+            self.assertEqual(run_start["moe_wanda_routing_mode"], "dense_softmax")
+            self.assertEqual(run_start["moe_wanda_routing_power"], 1.0)
+
+            summary = summary_path.read_text().strip()
+            self.assertIn("routing_mode=dense_softmax", summary)
+            self.assertIn("routing_power=1.0", summary)
+
+    def test_moe_scripts_forward_routing_flags(self):
+        for relpath in (
+            "scripts/qwen1_5.sh",
+            "scripts/qwen1_5_moe_wanda.sh",
+            "scripts/dsv2.sh",
+        ):
+            script_text = Path(relpath).read_text()
+            self.assertIn("--moe_wanda_routing_mode", script_text, msg=relpath)
+            self.assertIn("--moe_wanda_routing_power", script_text, msg=relpath)

@@ -35,6 +35,19 @@ def build_parser():
     parser.add_argument("--prune_method", type=str, choices=["moe_wanda"])
     parser.add_argument("--cache_dir", default="llm_weights", type=str )
     parser.add_argument('--use_variant', action="store_true", help="whether to use the wanda variant described in the appendix")
+    parser.add_argument(
+        "--moe_wanda_routing_mode",
+        type=str,
+        choices=["topk", "dense_softmax"],
+        default="dense_softmax",
+        help="Routing statistics mode for MoE-Wanda calibration.",
+    )
+    parser.add_argument(
+        "--moe_wanda_routing_power",
+        type=float,
+        default=2.0,
+        help="Exponent p used in routing-weight scaling g_e(x)^p.",
+    )
     parser.add_argument('--save', type=str, default=None, help='Path to save results.')
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
 

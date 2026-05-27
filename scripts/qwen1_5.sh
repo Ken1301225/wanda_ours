@@ -8,6 +8,8 @@ model="$hf_home/hub/models--Qwen--Qwen1.5-MoE-A2.7B"
 sparsity_ratio=0.75
 cuda_device=5
 seed=0
+routing_mode="dense_softmax"
+routing_power=2.0
 
 # Set CUDA device visibility
 # export CUDA_HOME=/data1/ldk/env/dkllm
@@ -36,7 +38,9 @@ run_python_command () {
     --seed $seed \
     --save $3 \
     --save_model $4 \
-    --nsamples 128
+    --nsamples 128 \
+    --moe_wanda_routing_mode $routing_mode \
+    --moe_wanda_routing_power $routing_power
 }
 
 

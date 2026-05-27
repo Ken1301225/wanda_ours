@@ -57,6 +57,15 @@ def _activation_derivative(act_fn, x):
     raise ValueError(f"Unsupported activation for MoE-Wanda gate derivative: {act_name or fn_name}")
 
 
+def _apply_routing_power(routing_weights, routing_power):
+    if routing_power <= 0:
+        raise ValueError(f"MoE-Wanda routing power must be > 0, got {routing_power}")
+    routing_weights = routing_weights.detach().float()
+    if routing_power == 1:
+        return routing_weights
+    return routing_weights.pow(routing_power)
+
+
 def _build_mask_from_metric(W_metric, sparsity_ratio, prune_n=0, prune_m=0):
     W_mask = torch.zeros_like(W_metric, dtype=torch.bool)
     if prune_n != 0:
@@ -73,6 +82,7 @@ def _build_mask_from_metric(W_metric, sparsity_ratio, prune_n=0, prune_m=0):
 
 class ExpertMoments:
     def __init__(self, expert_module):
+        self.expert_module = expert_module
         self.act_fn = getattr(expert_module, "act_fn", None)
         self.hidden_dim = expert_module.gate_proj.weight.shape[1]
         self.intermediate_dim = expert_module.gate_proj.weight.shape[0]
@@ -87,16 +97,43 @@ class ExpertMoments:
 
         self.pending_routing = []
 
-    def queue_routing(self, routing_weights):
+    def queue_routing(self, routing_weights, routing_power=2.0):
         if routing_weights is None or routing_weights.numel() == 0:
             return
-        self.pending_routing.append(routing_weights.detach())
+        self.pending_routing.append((routing_weights.detach(), routing_power))
+
+    def accumulate_dense(self, hidden_states, routing_weights, routing_power=2.0):
+        if routing_weights is None or routing_weights.numel() == 0:
+            return
+
+        x = _flatten_tokens(hidden_states.detach())
+        routing_scaled = _apply_routing_power(routing_weights, routing_power).reshape(-1, 1)
+        if x.shape[0] != routing_scaled.shape[0]:
+            raise RuntimeError("Dense MoE-Wanda routing weights do not align with token count.")
+
+        device = self.expert_module.gate_proj.weight.device
+        dtype = self.expert_module.gate_proj.weight.dtype
+        expert_input = x.to(device=device, dtype=dtype)
+        x_sq = x.to(device=device, dtype=torch.float32).pow(2)
+
+        gate_output = _flatten_tokens(self.expert_module.gate_proj(expert_input).detach()).float()
+        up_output = _flatten_tokens(self.expert_module.up_proj(expert_input).detach()).float()
+        activated_gate = self.act_fn(gate_output)
+        weighted_phi_sq = activated_gate.pow(2) * routing_scaled.to(device)
+        self.up_joint_sum += weighted_phi_sq.t().matmul(x_sq).cpu()
+
+        expert_hidden = activated_gate * up_output
+        self.down_joint_sum += (expert_hidden.pow(2) * routing_scaled.to(device)).sum(dim=0).cpu()
+
+        slope_sq = _activation_derivative(self.act_fn, gate_output).pow(2)
+        gate_scale_sq = up_output.pow(2) * slope_sq
+        self.gate_joint_sum += (gate_scale_sq * routing_scaled.to(device)).t().matmul(x_sq).cpu()
 
     def expert_pre_hook(self, _, __):
         if not self.pending_routing:
             raise RuntimeError("Missing routing weights for expert forward during MoE-Wanda statistics collection.")
-        routing = self.pending_routing.pop(0)
-        self.current_routing = routing.float().pow(2).reshape(-1, 1)
+        routing_weights, routing_power = self.pending_routing.pop(0)
+        self.current_routing = _apply_routing_power(routing_weights, routing_power).reshape(-1, 1)
         self.current_gate_output = None
         self.current_up_output = None
 
@@ -204,7 +241,20 @@ def _compute_topk_from_module(moe_module, hidden_states):
     return selected_experts.detach(), routing_weights.detach().float()
 
 
-def _queue_qwen_routing(moe_module, hidden_states, expert_map):
+def _compute_dense_routing_probs(moe_module, hidden_states):
+    hidden_states = hidden_states.detach()
+    gate_output = moe_module.gate(hidden_states)
+    router_logits, _, _ = _parse_gate_output(gate_output)
+
+    if router_logits is None:
+        raise RuntimeError(
+            "Dense-softmax MoE-Wanda statistics require router logits from moe_module.gate(...)."
+        )
+
+    return torch.softmax(router_logits.float(), dim=-1)
+
+
+def _queue_qwen_routing(moe_module, hidden_states, expert_map, routing_power=2.0):
     flat_hidden = _flatten_tokens(hidden_states)
     selected_experts, routing_weights = _compute_topk_from_module(moe_module, flat_hidden)
     selected_experts = selected_experts.reshape(-1, selected_experts.shape[-1])
@@ -214,12 +264,12 @@ def _queue_qwen_routing(moe_module, hidden_states, expert_map):
     for expert_idx, collector in expert_map.items():
         mask = expert_mask[expert_idx]
         topk_pos, token_idx = torch.where(mask)
-        collector.queue_routing(routing_weights[token_idx, topk_pos])
+        collector.queue_routing(routing_weights[token_idx, topk_pos], routing_power=routing_power)
 
     return flat_hidden.shape[0]
 
 
-def _queue_deepseek_routing(moe_module, hidden_states, expert_map):
+def _queue_deepseek_routing(moe_module, hidden_states, expert_map, routing_power=2.0):
     flat_hidden = _flatten_tokens(hidden_states)
     selected_experts, routing_weights = _compute_topk_from_module(moe_module, hidden_states)
     selected_experts = selected_experts.reshape(-1, selected_experts.shape[-1])
@@ -232,12 +282,19 @@ def _queue_deepseek_routing(moe_module, hidden_states, expert_map):
     sorted_routing = flat_routing[idxs]
 
     for expert_idx, collector in expert_map.items():
-        collector.queue_routing(sorted_routing[sorted_experts == expert_idx])
+        collector.queue_routing(sorted_routing[sorted_experts == expert_idx], routing_power=routing_power)
 
     return flat_hidden.shape[0]
 
 
-def attach_moe_wanda_hooks(layer, subset):
+def _accumulate_dense_routing(flat_hidden, routing_probs, expert_map, routing_power=2.0):
+    routing_probs = routing_probs.reshape(-1, routing_probs.shape[-1])
+    for expert_idx, collector in expert_map.items():
+        collector.accumulate_dense(flat_hidden, routing_probs[:, expert_idx], routing_power=routing_power)
+    return flat_hidden.shape[0]
+
+
+def attach_moe_wanda_hooks(layer, subset, routing_mode="topk", routing_power=2.0):
     collectors = {}
     groups = {}
     handles = []
@@ -257,37 +314,43 @@ def attach_moe_wanda_hooks(layer, subset):
         expert_idx = int(expert_prefix.split(".experts.", 1)[1].split(".", 1)[0])
         groups[parent_prefix]["experts"][expert_idx] = collectors[expert_prefix]
 
-    seen_modules = set()
-    for expert_prefix, collector in collectors.items():
-        expert_module = _resolve_submodule(layer, expert_prefix)
-        if expert_module is not None and expert_module not in seen_modules:
-            handles.append(expert_module.register_forward_pre_hook(collector.expert_pre_hook))
-            seen_modules.add(expert_module)
+    if routing_mode not in {"topk", "dense_softmax"}:
+        raise ValueError(f"Unsupported MoE-Wanda routing mode: {routing_mode}")
+    if routing_power <= 0:
+        raise ValueError(f"MoE-Wanda routing power must be > 0, got {routing_power}")
 
-        gate_proj = _resolve_submodule(layer, f"{expert_prefix}.gate_proj")
-        if gate_proj is not None and gate_proj not in seen_modules:
-            handles.append(gate_proj.register_forward_hook(collector.gate_hook))
-            seen_modules.add(gate_proj)
+    if routing_mode == "topk":
+        seen_modules = set()
+        for expert_prefix, collector in collectors.items():
+            expert_module = _resolve_submodule(layer, expert_prefix)
+            if expert_module is not None and expert_module not in seen_modules:
+                handles.append(expert_module.register_forward_pre_hook(collector.expert_pre_hook))
+                seen_modules.add(expert_module)
 
-        up_proj = _resolve_submodule(layer, f"{expert_prefix}.up_proj")
-        if up_proj is not None and up_proj not in seen_modules:
-            handles.append(up_proj.register_forward_hook(collector.up_hook))
-            seen_modules.add(up_proj)
+            gate_proj = _resolve_submodule(layer, f"{expert_prefix}.gate_proj")
+            if gate_proj is not None and gate_proj not in seen_modules:
+                handles.append(gate_proj.register_forward_hook(collector.gate_hook))
+                seen_modules.add(gate_proj)
 
-        down_proj = _resolve_submodule(layer, f"{expert_prefix}.down_proj")
-        if down_proj is not None and down_proj not in seen_modules:
-            handles.append(down_proj.register_forward_pre_hook(collector.down_pre_hook))
-            seen_modules.add(down_proj)
+            up_proj = _resolve_submodule(layer, f"{expert_prefix}.up_proj")
+            if up_proj is not None and up_proj not in seen_modules:
+                handles.append(up_proj.register_forward_hook(collector.up_hook))
+                seen_modules.add(up_proj)
 
-        if expert_module is not None and expert_module not in seen_modules:
-            seen_modules.add(expert_module)
+            down_proj = _resolve_submodule(layer, f"{expert_prefix}.down_proj")
+            if down_proj is not None and down_proj not in seen_modules:
+                handles.append(down_proj.register_forward_pre_hook(collector.down_pre_hook))
+                seen_modules.add(down_proj)
 
-        def make_expert_post_hook(local_collector):
-            def expert_post_hook(module, inp, out):
-                local_collector.finalize_gate_stats(inp[0])
-            return expert_post_hook
+            if expert_module is not None and expert_module not in seen_modules:
+                seen_modules.add(expert_module)
 
-        handles.append(expert_module.register_forward_hook(make_expert_post_hook(collector)))
+            def make_expert_post_hook(local_collector):
+                def expert_post_hook(module, inp, out):
+                    local_collector.finalize_gate_stats(inp[0])
+                return expert_post_hook
+
+            handles.append(expert_module.register_forward_hook(make_expert_post_hook(collector)))
 
     for parent_prefix, payload in groups.items():
         moe_module = _resolve_submodule(layer, parent_prefix)
@@ -301,10 +364,23 @@ def attach_moe_wanda_hooks(layer, subset):
             def moe_pre_hook(module, inp):
                 hidden_states = inp[0]
                 module_name = type(local_module).__name__.lower()
-                if "deepseek" in module_name or hasattr(local_module, "moe_infer"):
-                    token_count = _queue_deepseek_routing(local_module, hidden_states, local_expert_map)
+                if routing_mode == "dense_softmax":
+                    flat_hidden = _flatten_tokens(hidden_states)
+                    if "deepseek" in module_name or hasattr(local_module, "moe_infer"):
+                        routing_probs = _compute_dense_routing_probs(local_module, hidden_states)
+                    else:
+                        routing_probs = _compute_dense_routing_probs(local_module, flat_hidden)
+                    token_count = _accumulate_dense_routing(
+                        flat_hidden, routing_probs, local_expert_map, routing_power=routing_power
+                    )
+                elif "deepseek" in module_name or hasattr(local_module, "moe_infer"):
+                    token_count = _queue_deepseek_routing(
+                        local_module, hidden_states, local_expert_map, routing_power=routing_power
+                    )
                 else:
-                    token_count = _queue_qwen_routing(local_module, hidden_states, local_expert_map)
+                    token_count = _queue_qwen_routing(
+                        local_module, hidden_states, local_expert_map, routing_power=routing_power
+                    )
                 local_state.total_tokens += token_count
             return moe_pre_hook
 

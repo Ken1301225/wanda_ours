@@ -6,6 +6,8 @@ model="/data1/ldk/huggingface/hub/models--deepseek-ai--DeepSeek-V2-Lite/snapshot
 sparsity_ratio=0.75 #0.75
 cuda_device=1
 seed=0
+routing_mode="dense_softmax"
+routing_power=2.0
 
 # Set CUDA device visibility
 # export CUDA_HOME=/data1/ldk/env/dkllm_dsv2/
@@ -25,7 +27,9 @@ run_python_command () {
     --seed $seed \
     --save $3 \
     --save_model $4 \
-    --nsamples 512 
+    --nsamples 512 \
+    --moe_wanda_routing_mode $routing_mode \
+    --moe_wanda_routing_power $routing_power
 }
 
 

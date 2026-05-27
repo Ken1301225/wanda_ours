@@ -1,7 +1,23 @@
 import argparse
 import json
 import os
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
+
+
+def _safe_version(name):
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return "unavailable"
+
+
+def _safe_cuda_device_count():
+    try:
+        import torch
+    except ImportError:
+        return 0
+
+    return torch.cuda.device_count()
 
 
 def append_run_diagnostic(args, payload):
@@ -48,17 +64,19 @@ def prepare_run_outputs(args):
             "sparsity_ratio": args.sparsity_ratio,
             "sparsity_type": args.sparsity_type,
             "use_variant": bool(args.use_variant),
+            "moe_wanda_routing_mode": args.moe_wanda_routing_mode,
+            "moe_wanda_routing_power": args.moe_wanda_routing_power,
             "save": args.save,
             "save_model": args.save_model,
-            "torch_version": version("torch"),
-            "transformers_version": version("transformers"),
-            "accelerate_version": version("accelerate"),
-            "cuda_device_count": torch.cuda.device_count(),
+            "torch_version": _safe_version("torch"),
+            "transformers_version": _safe_version("transformers"),
+            "accelerate_version": _safe_version("accelerate"),
+            "cuda_device_count": _safe_cuda_device_count(),
         },
     )
     append_run_summary(
         args,
-        f"run_start method={args.prune_method} model={args.model} sparsity={args.sparsity_ratio} nsamples={args.nsamples}",
+        f"run_start method={args.prune_method} model={args.model} sparsity={args.sparsity_ratio} nsamples={args.nsamples} routing_mode={args.moe_wanda_routing_mode} routing_power={args.moe_wanda_routing_power}",
     )
 
 
@@ -100,6 +118,19 @@ def build_parser():
         "--use_variant",
         action="store_true",
         help="whether to use the wanda variant described in the appendix",
+    )
+    parser.add_argument(
+        "--moe_wanda_routing_mode",
+        type=str,
+        choices=["topk", "dense_softmax"],
+        default="dense_softmax",
+        help="Routing statistics mode for MoE-Wanda calibration.",
+    )
+    parser.add_argument(
+        "--moe_wanda_routing_power",
+        type=float,
+        default=2.0,
+        help="Exponent p used in routing-weight scaling g_e(x)^p.",
     )
     parser.add_argument("--save", type=str, default=None, help="Path to save results.")
     parser.add_argument(

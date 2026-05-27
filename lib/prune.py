@@ -311,7 +311,12 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             dev = model.hf_device_map[f"model.layers.{i}"]
             inps, outs, attention_mask, position_ids, position_embeddings = inps.to(dev), outs.to(dev), attention_mask.to(dev), position_ids.to(dev) , position_embeddings.to(dev)
 
-        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(layer, subset)
+        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(
+            layer,
+            subset,
+            routing_mode=getattr(args, "moe_wanda_routing_mode", "dense_softmax"),
+            routing_power=getattr(args, "moe_wanda_routing_power", 2.0),
+        )
         for j in range(args.nsamples):
             with torch.no_grad():
                 outs[j] = layer(inps[j].unsqueeze(0), attention_mask=attention_mask, position_ids=position_ids,position_embeddings=position_embeddings)[0]
@@ -550,7 +555,12 @@ def prune_ablate(args, model, tokenizer, dev, prune_n=0, prune_m=0):
         for name in subset:
             gpts[name] = AblateGPT(subset[name])
 
-        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(layer, subset)
+        moe_collectors, moe_groups, moe_handles = attach_moe_wanda_hooks(
+            layer,
+            subset,
+            routing_mode=getattr(args, "moe_wanda_routing_mode", "dense_softmax"),
+            routing_power=getattr(args, "moe_wanda_routing_power", 2.0),
+        )
 
         def add_batch(name):
             def tmp(_, inp, out):
