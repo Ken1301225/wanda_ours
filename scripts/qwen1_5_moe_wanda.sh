@@ -1,44 +1,44 @@
 #!/bin/bash
 
-# Set common variables
-base_dir="/data1/data/kangborui/gujinrui/wanda"
-hf_home="$base_dir/huggingface"
-model_repo="Qwen/Qwen1.5-MoE-A2.7B"
-model="$hf_home/hub/models--Qwen--Qwen1.5-MoE-A2.7B"
-sparsity_ratio=0.75
-cuda_device=5
-seed=0
-routing_mode="dense_softmax"
-routing_power=2.0
+set -euo pipefail
 
-# Set CUDA device visibility
-export CUDA_VISIBLE_DEVICES=$cuda_device
-export HF_HOME="$hf_home"
-export HF_HUB_CACHE="$hf_home/hub"
-export HF_DATASETS_CACHE="$hf_home/datasets"
+# Edit these shared roots to match your environment.
+MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
+HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/qwen1_5/moe_wanda}"
 
-mkdir -p "$HF_HUB_CACHE" "$HF_DATASETS_CACHE" "$base_dir/output" "$base_dir/checkpoints"
+MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
+MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.75}"
+CUDA_DEVICE="${CUDA_DEVICE:-0}"
+SEED="${SEED:-0}"
+NSAMPLES="${NSAMPLES:-128}"
+ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
+ROUTING_POWER="${ROUTING_POWER:-2.0}"
+OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt}"
 
-if [ ! -d "$model" ]; then
-    echo "Model cache not found: $model"
-    echo "Download with: huggingface-cli download $model_repo --local-dir $model"
+export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+export HF_HOME="${HF_HOME:-$HF_CACHE_ROOT}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_CACHE_ROOT}/datasets}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_CACHE_ROOT}/hub}"
+
+mkdir -p "$OUTPUT_DIR" "$CHECKPOINT_DIR"
+
+if [ ! -d "$MODEL" ]; then
+    echo "Model cache not found: $MODEL"
+    echo "Download with: huggingface-cli download $MODEL_REPO --local-dir $MODEL"
     exit 1
 fi
 
-run_python_command () {
-    python main.py \
-    --model $model \
+python main.py \
+    --model "$MODEL" \
     --prune_method moe_wanda \
-    --sparsity_ratio $sparsity_ratio \
-    --sparsity_type $1 \
-    --seed $seed \
-    --save $2 \
-    --save_model $3 \
-    --nsamples 128 \
-    --moe_wanda_routing_mode $routing_mode \
-    --moe_wanda_routing_power $routing_power
-}
-
-echo "Running Qwen1.5 MoE-Wanda pruning"
-run_python_command "unstructured" "$base_dir/output/qwen1_5_moe_wanda" "$base_dir/checkpoints/qwen1_5_moe_wanda"
-echo "Finished Qwen1.5 MoE-Wanda pruning"
+    --sparsity_ratio "$SPARSITY_RATIO" \
+    --sparsity_type unstructured \
+    --seed "$SEED" \
+    --save "$OUTPUT_DIR" \
+    --save_model "$CHECKPOINT_DIR" \
+    --nsamples "$NSAMPLES" \
+    --moe_wanda_routing_mode "$ROUTING_MODE" \
+    --moe_wanda_routing_power "$ROUTING_POWER"

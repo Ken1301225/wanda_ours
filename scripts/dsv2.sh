@@ -1,39 +1,37 @@
 #!/bin/bash
 
-# Set common variables
+set -euo pipefail
+
+# Edit these shared roots to match your environment.
+MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/huggingface/hub}"
+HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/deepseekv2/moe_wanda}"
+
 # Keep paths without trailing '/' to avoid dynamic-module cache key collisions.
-model="/data1/ldk/huggingface/hub/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0"
-sparsity_ratio=0.75 #0.75
-cuda_device=1
-seed=0
-routing_mode="dense_softmax"
-routing_power=2.0
+MODEL="${MODEL:-${MODEL_ROOT}/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.75}"
+CUDA_DEVICE="${CUDA_DEVICE:-1}"
+SEED="${SEED:-0}"
+NSAMPLES="${NSAMPLES:-512}"
+ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
+ROUTING_POWER="${ROUTING_POWER:-2.0}"
+OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output}"
+CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt}"
 
-# Set CUDA device visibility
-# export CUDA_HOME=/data1/ldk/env/dkllm_dsv2/
-# export PATH=$CUDA_HOME/bin:$PATH
-export CUDA_VISIBLE_DEVICES=$cuda_device
-export HF_DATASETS_CACHE="/data1/ldk/huggingface/datasets"
-export HF_HUB_CACHE="/data1/ldk/huggingface/hub"
+export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_CACHE_ROOT}/datasets}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_CACHE_ROOT}/hub}"
 
+mkdir -p "$OUTPUT_DIR" "$CHECKPOINT_DIR"
 
-# Define function to run python command
-run_python_command () {
-    python main_dsv2.py \
-    --model $model \
-    --prune_method $1 \
-    --sparsity_ratio $sparsity_ratio \
-    --sparsity_type $2 \
-    --seed $seed \
-    --save $3 \
-    --save_model $4 \
-    --nsamples 512 \
-    --moe_wanda_routing_mode $routing_mode \
-    --moe_wanda_routing_power $routing_power
-}
-
-
-
-echo "Running with MoE-Wanda pruning method"
-run_python_command "moe_wanda" "unstructured" "/data1/ldk/SPNN/deepseekv2/moe_wanda/output" "/data1/ldk/SPNN/deepseekv2/moe_wanda/ckpt"
-echo "Finished MoE-Wanda pruning method"
+python main_dsv2.py \
+    --model "$MODEL" \
+    --prune_method moe_wanda \
+    --sparsity_ratio "$SPARSITY_RATIO" \
+    --sparsity_type unstructured \
+    --seed "$SEED" \
+    --save "$OUTPUT_DIR" \
+    --save_model "$CHECKPOINT_DIR" \
+    --nsamples "$NSAMPLES" \
+    --moe_wanda_routing_mode "$ROUTING_MODE" \
+    --moe_wanda_routing_power "$ROUTING_POWER"

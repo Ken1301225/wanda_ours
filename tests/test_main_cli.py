@@ -124,3 +124,15 @@ class MainCliTests(unittest.TestCase):
             script_text = Path(relpath).read_text()
             self.assertIn("--moe_wanda_routing_mode", script_text, msg=relpath)
             self.assertIn("--moe_wanda_routing_power", script_text, msg=relpath)
+
+    def test_moe_scripts_use_anti_collapse_style_path_roots(self):
+        expected_tokens = {
+            "scripts/qwen1_5.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
+            "scripts/qwen1_5_moe_wanda.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
+            "scripts/dsv2.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
+        }
+
+        for relpath, tokens in expected_tokens.items():
+            script_text = Path(relpath).read_text()
+            for token in tokens:
+                self.assertIn(token, script_text, msg=f"{relpath} missing {token}")
