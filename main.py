@@ -66,6 +66,8 @@ def prepare_run_outputs(args):
             "use_variant": bool(args.use_variant),
             "moe_wanda_routing_mode": args.moe_wanda_routing_mode,
             "moe_wanda_routing_power": args.moe_wanda_routing_power,
+            "moe_wanda_cluster_experts": bool(args.moe_wanda_cluster_experts),
+            "moe_wanda_cluster_k": args.moe_wanda_cluster_k,
             "save": args.save,
             "save_model": args.save_model,
             "torch_version": _safe_version("torch"),
@@ -76,7 +78,7 @@ def prepare_run_outputs(args):
     )
     append_run_summary(
         args,
-        f"run_start method={args.prune_method} model={args.model} sparsity={args.sparsity_ratio} nsamples={args.nsamples} routing_mode={args.moe_wanda_routing_mode} routing_power={args.moe_wanda_routing_power}",
+        f"run_start method={args.prune_method} model={args.model} sparsity={args.sparsity_ratio} nsamples={args.nsamples} routing_mode={args.moe_wanda_routing_mode} routing_power={args.moe_wanda_routing_power} cluster_experts={bool(args.moe_wanda_cluster_experts)} cluster_k={args.moe_wanda_cluster_k}",
     )
 
 
@@ -131,6 +133,17 @@ def build_parser():
         type=float,
         default=2.0,
         help="Exponent p used in routing-weight scaling g_e(x)^p.",
+    )
+    parser.add_argument(
+        "--moe_wanda_cluster_experts",
+        action="store_true",
+        help="Cluster experts by router-logit traces and prune within each cluster.",
+    )
+    parser.add_argument(
+        "--moe_wanda_cluster_k",
+        type=int,
+        default=15,
+        help="Fixed number of expert clusters per MoE layer when clustering is enabled.",
     )
     parser.add_argument("--save", type=str, default=None, help="Path to save results.")
     parser.add_argument(

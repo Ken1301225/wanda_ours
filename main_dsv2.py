@@ -48,6 +48,17 @@ def build_parser():
         default=2.0,
         help="Exponent p used in routing-weight scaling g_e(x)^p.",
     )
+    parser.add_argument(
+        "--moe_wanda_cluster_experts",
+        action="store_true",
+        help="Cluster experts by router-logit traces and prune within each cluster.",
+    )
+    parser.add_argument(
+        "--moe_wanda_cluster_k",
+        type=int,
+        default=15,
+        help="Fixed number of expert clusters per MoE layer when clustering is enabled.",
+    )
     parser.add_argument('--save', type=str, default=None, help='Path to save results.')
     parser.add_argument('--save_model', type=str, default=None, help='Path to save the pruned model.')
 

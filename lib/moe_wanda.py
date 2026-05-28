@@ -80,6 +80,125 @@ def _build_mask_from_metric(W_metric, sparsity_ratio, prune_n=0, prune_m=0):
     return W_mask
 
 
+def _build_global_mask_from_flat_metric(flat_metric, sparsity_ratio):
+    prune_count = int(flat_metric.numel() * sparsity_ratio)
+    flat_mask = torch.zeros_like(flat_metric, dtype=torch.bool)
+    if prune_count <= 0:
+        return flat_mask
+
+    indices = torch.argsort(flat_metric.float(), stable=True)[:prune_count]
+    flat_mask[indices] = True
+    return flat_mask
+
+
+def _normalize_router_trace_matrix(trace_matrix):
+    trace_matrix = trace_matrix.float()
+    trace_matrix = trace_matrix - trace_matrix.mean(dim=1, keepdim=True)
+    norms = torch.norm(trace_matrix, p=2, dim=1, keepdim=True)
+    normalized = trace_matrix / norms.clamp_min_(1e-12)
+    normalized = torch.where(norms > 1e-12, normalized, torch.zeros_like(normalized))
+    return normalized
+
+
+def _run_fixed_kmeans(features, cluster_k, seed=0, max_iters=25):
+    num_points = features.shape[0]
+    if cluster_k <= 1 or num_points <= 1:
+        return torch.zeros(num_points, dtype=torch.long)
+    if cluster_k >= num_points:
+        return torch.arange(num_points, dtype=torch.long)
+
+    generator = torch.Generator(device="cpu")
+    generator.manual_seed(int(seed))
+    perm = torch.randperm(num_points, generator=generator)
+    centroids = features[perm[:cluster_k]].clone()
+    labels = None
+
+    for _ in range(max_iters):
+        similarity = features.matmul(centroids.t())
+        new_labels = torch.argmax(similarity, dim=1)
+        if labels is not None and torch.equal(labels, new_labels):
+            break
+        labels = new_labels
+
+        centroid_rows = []
+        for cluster_idx in range(cluster_k):
+            members = features[labels == cluster_idx]
+            if members.numel() == 0:
+                centroid_rows.append(features[perm[cluster_idx % num_points]])
+                continue
+
+            centroid = members.mean(dim=0)
+            norm = torch.norm(centroid, p=2)
+            if norm > 1e-12:
+                centroid = centroid / norm
+            centroid_rows.append(centroid)
+        centroids = torch.stack(centroid_rows, dim=0)
+
+    return labels if labels is not None else torch.zeros(num_points, dtype=torch.long)
+
+
+def build_expert_clusters(groups, cluster_k, seed=0):
+    cluster_assignments = {}
+    cluster_summaries = {}
+
+    for parent_prefix, payload in groups.items():
+        expert_ids = sorted(payload["experts"])
+        state = payload["state"]
+        if not state.router_logits_trace:
+            raise RuntimeError("Missing router logits needed for expert clustering.")
+
+        router_logits = torch.cat(state.router_logits_trace, dim=0)
+        expert_trace_matrix = router_logits.t()[expert_ids]
+        features = _normalize_router_trace_matrix(expert_trace_matrix)
+        effective_k = min(int(cluster_k), len(expert_ids))
+        labels = _run_fixed_kmeans(features, effective_k, seed=seed)
+
+        assignments = {
+            expert_id: int(labels[idx].item())
+            for idx, expert_id in enumerate(expert_ids)
+        }
+        cluster_sizes = {}
+        for cluster_id in range(effective_k):
+            cluster_sizes[cluster_id] = sum(
+                1 for assigned_cluster in assignments.values() if assigned_cluster == cluster_id
+            )
+
+        cluster_assignments[parent_prefix] = assignments
+        cluster_summaries[parent_prefix] = {
+            "cluster_k_requested": int(cluster_k),
+            "cluster_count": int(effective_k),
+            "expert_count": len(expert_ids),
+            "cluster_sizes": cluster_sizes,
+        }
+
+    return cluster_assignments, cluster_summaries
+
+
+def build_cluster_global_masks(metrics_by_name, cluster_by_name, sparsity_ratio):
+    grouped_names = {}
+    for name, metric in metrics_by_name.items():
+        parent_prefix, _, suffix = _split_expert_name(name)
+        if suffix is None or parent_prefix is None:
+            raise ValueError(f"Expected MoE expert module name, got {name}")
+        if name not in cluster_by_name:
+            raise KeyError(f"Missing cluster assignment for {name}")
+        key = (parent_prefix, cluster_by_name[name], suffix)
+        grouped_names.setdefault(key, []).append((name, metric))
+
+    masks = {}
+    for _, grouped_metrics in grouped_names.items():
+        flat_metric = torch.cat([metric.reshape(-1) for _, metric in grouped_metrics], dim=0)
+        flat_mask = _build_global_mask_from_flat_metric(flat_metric, sparsity_ratio)
+
+        start = 0
+        for name, metric in grouped_metrics:
+            end = start + metric.numel()
+            masks[name] = flat_mask[start:end].reshape_as(metric)
+            start = end
+
+    return masks
+
+
 class ExpertMoments:
     def __init__(self, expert_module):
         self.expert_module = expert_module
@@ -184,6 +303,7 @@ class ExpertMoments:
 class MoeGroupState:
     def __init__(self):
         self.total_tokens = 0
+        self.router_logits_trace = []
 
 
 def _parse_gate_output(gate_output):
@@ -241,6 +361,17 @@ def _compute_topk_from_module(moe_module, hidden_states):
     return selected_experts.detach(), routing_weights.detach().float()
 
 
+def _compute_router_logits(moe_module, hidden_states):
+    hidden_states = hidden_states.detach()
+    gate_output = moe_module.gate(hidden_states)
+    router_logits, _, _ = _parse_gate_output(gate_output)
+
+    if router_logits is None:
+        raise RuntimeError("Router logits are required for clustered MoE-Wanda pruning.")
+
+    return router_logits.detach().float()
+
+
 def _compute_dense_routing_probs(moe_module, hidden_states):
     hidden_states = hidden_states.detach()
     gate_output = moe_module.gate(hidden_states)
@@ -294,7 +425,7 @@ def _accumulate_dense_routing(flat_hidden, routing_probs, expert_map, routing_po
     return flat_hidden.shape[0]
 
 
-def attach_moe_wanda_hooks(layer, subset, routing_mode="topk", routing_power=2.0):
+def attach_moe_wanda_hooks(layer, subset, routing_mode="topk", routing_power=2.0, collect_router_logits=False):
     collectors = {}
     groups = {}
     handles = []
@@ -364,8 +495,12 @@ def attach_moe_wanda_hooks(layer, subset, routing_mode="topk", routing_power=2.0
             def moe_pre_hook(module, inp):
                 hidden_states = inp[0]
                 module_name = type(local_module).__name__.lower()
+                flat_hidden = _flatten_tokens(hidden_states)
+                if collect_router_logits:
+                    router_logits_input = hidden_states if ("deepseek" in module_name or hasattr(local_module, "moe_infer")) else flat_hidden
+                    router_logits = _compute_router_logits(local_module, router_logits_input)
+                    local_state.router_logits_trace.append(router_logits.reshape(-1, router_logits.shape[-1]).cpu())
                 if routing_mode == "dense_softmax":
-                    flat_hidden = _flatten_tokens(hidden_states)
                     if "deepseek" in module_name or hasattr(local_module, "moe_infer"):
                         routing_probs = _compute_dense_routing_probs(local_module, hidden_states)
                     else:
