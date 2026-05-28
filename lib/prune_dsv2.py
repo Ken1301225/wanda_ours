@@ -3,7 +3,14 @@ import heapq
 import torch 
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
-from .moe_wanda import attach_moe_wanda_hooks, build_moe_wanda_metric, build_moe_wanda_mask
+from .moe_wanda import (
+    attach_moe_wanda_hooks,
+    build_cluster_global_masks,
+    build_expert_clusters,
+    filter_moe_expert_linears,
+    build_moe_wanda_metric,
+    build_moe_wanda_mask,
+)
 from .data import get_loaders 
 
 from .ablate import AblateGPT 
@@ -38,7 +45,7 @@ def check_sparsity(model):
     total_params = 0
     for i in range(len(layers)):
         layer = layers[i]
-        subset = find_layers(layer)
+        subset = filter_moe_expert_linears(find_layers(layer))
 
         sub_count = 0
         sub_params = 0
@@ -104,6 +111,18 @@ def return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before):
     cur_sparsity = (W_mask==True).sum() / W_mask.numel()
     return W_mask, cur_sparsity
 
+
+def _build_module_cluster_ids(subset, cluster_assignments):
+    cluster_by_name = {}
+    for name in subset:
+        parts = name.split(".experts.", 1)
+        if len(parts) != 2:
+            continue
+        parent_prefix = parts[0]
+        expert_idx = int(parts[1].split(".", 1)[0])
+        cluster_by_name[name] = cluster_assignments[parent_prefix][expert_idx]
+    return cluster_by_name
+
 def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     layers = model.model.layers 
 
@@ -129,6 +148,12 @@ def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune
 def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
+    cluster_experts = bool(getattr(args, "moe_wanda_cluster_experts", False))
+
+    if cluster_experts and prune_n != 0:
+        raise ValueError("Clustered MoE-Wanda pruning currently supports only unstructured sparsity.")
+    if cluster_experts and args.use_variant:
+        raise ValueError("Clustered MoE-Wanda pruning does not support --use_variant yet.")
 
     print("loading calibdation data")
     dataloader, _ = get_loaders("c4",nsamples=args.nsamples,seed=args.seed,seqlen=model.seqlen,tokenizer=tokenizer)
@@ -150,6 +175,7 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             subset,
             routing_mode=getattr(args, "moe_wanda_routing_mode", "dense_softmax"),
             routing_power=getattr(args, "moe_wanda_routing_power", 2.0),
+            collect_router_logits=cluster_experts,
         )
         for j in range(args.nsamples):
             with torch.no_grad():
@@ -157,45 +183,66 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
         for h in moe_handles:
             h.remove()
 
+        cluster_by_name = {}
+        metrics_by_name = {}
+        masks_by_name = {}
+        if cluster_experts:
+            cluster_assignments, _ = build_expert_clusters(
+                moe_groups,
+                getattr(args, "moe_wanda_cluster_k", 15),
+                seed=getattr(args, "seed", 0),
+            )
+            cluster_by_name = _build_module_cluster_ids(subset, cluster_assignments)
+            for name in subset:
+                W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
+                if W_metric is None:
+                    raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
+                metrics_by_name[name] = W_metric
+            masks_by_name = build_cluster_global_masks(metrics_by_name, cluster_by_name, args.sparsity_ratio)
+
         for name in subset:
             print(f"pruning layer {i} name {name}")
-            W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
-            if W_metric is None:
-                raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
-
-            W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
-            if prune_n != 0:
-                # structured n:m sparsity
-                for ii in range(W_metric.shape[1]):
-                    if ii % prune_m == 0:
-                        tmp = W_metric[:,ii:(ii+prune_m)].float()
-                        W_mask.scatter_(1,ii+torch.topk(tmp, prune_n,dim=1, largest=False)[1], True)
+            if cluster_experts:
+                W_metric = metrics_by_name[name]
+                W_mask = masks_by_name[name]
             else:
-                sort_res = torch.sort(W_metric, dim=-1, stable=True)
+                W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
+                if W_metric is None:
+                    raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
 
-                if args.use_variant:
-                    # wanda variant 
-                    tmp_metric = torch.cumsum(sort_res[0], dim=1)
-                    sum_before = W_metric.sum(dim=1)
-
-                    alpha = 0.4
-                    alpha_hist = [0., 0.8]
-                    W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                    while (torch.abs(cur_sparsity - args.sparsity_ratio)>0.001) and (alpha_hist[1]-alpha_hist[0]>=0.001):
-                        if cur_sparsity > args.sparsity_ratio:
-                            alpha_new = (alpha + alpha_hist[0]) / 2.0
-                            alpha_hist[1] = alpha
-                        else:
-                            alpha_new = (alpha + alpha_hist[1]) / 2.0
-                            alpha_hist[0] = alpha
-
-                        alpha = alpha_new 
-                        W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                    print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
+                W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
+                if prune_n != 0:
+                    # structured n:m sparsity
+                    for ii in range(W_metric.shape[1]):
+                        if ii % prune_m == 0:
+                            tmp = W_metric[:,ii:(ii+prune_m)].float()
+                            W_mask.scatter_(1,ii+torch.topk(tmp, prune_n,dim=1, largest=False)[1], True)
                 else:
-                    # unstructured pruning
-                    indices = sort_res[1][:,:int(W_metric.shape[1]*args.sparsity_ratio)]
-                    W_mask.scatter_(1, indices, True)
+                    sort_res = torch.sort(W_metric, dim=-1, stable=True)
+
+                    if args.use_variant:
+                        # wanda variant
+                        tmp_metric = torch.cumsum(sort_res[0], dim=1)
+                        sum_before = W_metric.sum(dim=1)
+
+                        alpha = 0.4
+                        alpha_hist = [0., 0.8]
+                        W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+                        while (torch.abs(cur_sparsity - args.sparsity_ratio)>0.001) and (alpha_hist[1]-alpha_hist[0]>=0.001):
+                            if cur_sparsity > args.sparsity_ratio:
+                                alpha_new = (alpha + alpha_hist[0]) / 2.0
+                                alpha_hist[1] = alpha
+                            else:
+                                alpha_new = (alpha + alpha_hist[1]) / 2.0
+                                alpha_hist[0] = alpha
+
+                            alpha = alpha_new
+                            W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+                        print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
+                    else:
+                        # unstructured pruning
+                        indices = sort_res[1][:,:int(W_metric.shape[1]*args.sparsity_ratio)]
+                        W_mask.scatter_(1, indices, True)
 
             subset[name].weight.data[W_mask] = 0  ## set weights to zero 
 

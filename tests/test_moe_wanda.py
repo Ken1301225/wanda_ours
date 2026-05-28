@@ -3,6 +3,7 @@ import unittest
 
 from lib.moe_wanda import (
     attach_moe_wanda_hooks,
+    build_cluster_global_masks,
     build_moe_wanda_metric,
     filter_moe_expert_linears,
     is_moe_expert_linear,
@@ -204,3 +205,25 @@ class MoeWandaTests(unittest.TestCase):
         expert0_p1 = collectors_p1["mlp.experts.0"].down_joint_sum.sum().item()
         expert0_p2 = collectors_p2["mlp.experts.0"].down_joint_sum.sum().item()
         self.assertGreater(expert0_p1, expert0_p2)
+
+    @unittest.skipIf(torch is None, "torch is not installed in the current test runtime")
+    def test_build_cluster_global_masks_redistributes_budget_within_cluster(self):
+        metrics_by_name = {
+            "mlp.experts.0.up_proj": torch.tensor([[10.0, 9.0], [8.0, 7.0]]),
+            "mlp.experts.1.up_proj": torch.tensor([[4.0, 3.0], [2.0, 1.0]]),
+            "mlp.experts.2.up_proj": torch.tensor([[6.0, 5.0], [0.4, 0.3]]),
+            "mlp.experts.3.up_proj": torch.tensor([[0.2, 0.1], [0.05, 0.01]]),
+        }
+        cluster_by_name = {
+            "mlp.experts.0.up_proj": 0,
+            "mlp.experts.1.up_proj": 0,
+            "mlp.experts.2.up_proj": 1,
+            "mlp.experts.3.up_proj": 1,
+        }
+
+        masks = build_cluster_global_masks(metrics_by_name, cluster_by_name, sparsity_ratio=0.5)
+
+        self.assertEqual(int(masks["mlp.experts.0.up_proj"].sum().item()), 0)
+        self.assertEqual(int(masks["mlp.experts.1.up_proj"].sum().item()), 4)
+        self.assertEqual(int(masks["mlp.experts.2.up_proj"].sum().item()), 0)
+        self.assertEqual(int(masks["mlp.experts.3.up_proj"].sum().item()), 4)

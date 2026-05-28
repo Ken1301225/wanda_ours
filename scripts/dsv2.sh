@@ -15,6 +15,8 @@ SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-512}"
 ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
 ROUTING_POWER="${ROUTING_POWER:-2.0}"
+CLUSTER_EXPERTS="${CLUSTER_EXPERTS:-false}"
+CLUSTER_K="${CLUSTER_K:-15}"
 OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt}"
 
@@ -23,6 +25,11 @@ export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_CACHE_ROOT}/datasets}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_CACHE_ROOT}/hub}"
 
 mkdir -p "$OUTPUT_DIR" "$CHECKPOINT_DIR"
+
+CLUSTER_ARGS=(--moe_wanda_cluster_k "$CLUSTER_K")
+if [ "$CLUSTER_EXPERTS" = "true" ]; then
+    CLUSTER_ARGS+=(--moe_wanda_cluster_experts)
+fi
 
 python main_dsv2.py \
     --model "$MODEL" \
@@ -34,4 +41,5 @@ python main_dsv2.py \
     --save_model "$CHECKPOINT_DIR" \
     --nsamples "$NSAMPLES" \
     --moe_wanda_routing_mode "$ROUTING_MODE" \
-    --moe_wanda_routing_power "$ROUTING_POWER"
+    --moe_wanda_routing_power "$ROUTING_POWER" \
+    "${CLUSTER_ARGS[@]}"

@@ -4,7 +4,14 @@ import json
 import torch 
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
-from .moe_wanda import attach_moe_wanda_hooks, build_moe_wanda_mask, build_moe_wanda_metric, filter_moe_expert_linears
+from .moe_wanda import (
+    attach_moe_wanda_hooks,
+    build_cluster_global_masks,
+    build_expert_clusters,
+    build_moe_wanda_mask,
+    build_moe_wanda_metric,
+    filter_moe_expert_linears,
+)
 from .data import get_loaders 
 
 from .ablate import AblateGPT 
@@ -140,6 +147,45 @@ def _summarize_modules(module_diagnostics):
         }
         for entry in top_zero_cols
     ]
+
+
+def _summarize_cluster_pools(module_diagnostics):
+    cluster_entries = [entry for entry in module_diagnostics if "cluster_id" in entry]
+    pool_summary = {}
+    for entry in cluster_entries:
+        key = (entry["cluster_id"], entry["projection"])
+        pool_summary.setdefault(key, []).append(entry)
+
+    result = []
+    for (cluster_id, projection), entries in sorted(pool_summary.items()):
+        mask_ratios = [entry["mask_ratio"] for entry in entries]
+        post_sparsities = [entry["post_sparsity"] for entry in entries]
+        result.append(
+            {
+                "cluster_id": int(cluster_id),
+                "projection": projection,
+                "module_count": len(entries),
+                "mean_mask_ratio": float(sum(mask_ratios) / len(mask_ratios)),
+                "min_mask_ratio": float(min(mask_ratios)),
+                "max_mask_ratio": float(max(mask_ratios)),
+                "mean_post_sparsity": float(sum(post_sparsities) / len(post_sparsities)),
+                "min_post_sparsity": float(min(post_sparsities)),
+                "max_post_sparsity": float(max(post_sparsities)),
+            }
+        )
+    return result
+
+
+def _build_module_cluster_ids(subset, cluster_assignments):
+    cluster_by_name = {}
+    for name in subset:
+        parts = name.split(".experts.", 1)
+        if len(parts) != 2:
+            continue
+        parent_prefix = parts[0]
+        expert_idx = int(parts[1].split(".", 1)[0])
+        cluster_by_name[name] = cluster_assignments[parent_prefix][expert_idx]
+    return cluster_by_name
 
 
 def _layer_delta_stats(layer, inps, outs, args, attention_mask=None, position_ids=None, position_embeddings=None):
@@ -295,6 +341,12 @@ def prune_magnitude(args, model, tokenizer, device=torch.device("cuda:0"), prune
 def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune_n=0, prune_m=0):
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
+    cluster_experts = bool(getattr(args, "moe_wanda_cluster_experts", False))
+
+    if cluster_experts and prune_n != 0:
+        raise ValueError("Clustered MoE-Wanda pruning currently supports only unstructured sparsity.")
+    if cluster_experts and args.use_variant:
+        raise ValueError("Clustered MoE-Wanda pruning does not support --use_variant yet.")
 
     print("loading calibdation data")
     dataloader, _ = get_loaders("c4",nsamples=args.nsamples,seed=args.seed,seqlen=model.seqlen,tokenizer=tokenizer)
@@ -316,6 +368,7 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             subset,
             routing_mode=getattr(args, "moe_wanda_routing_mode", "dense_softmax"),
             routing_power=getattr(args, "moe_wanda_routing_power", 2.0),
+            collect_router_logits=cluster_experts,
         )
         for j in range(args.nsamples):
             with torch.no_grad():
@@ -323,49 +376,77 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
         for h in moe_handles:
             h.remove()
 
+        cluster_by_name = {}
+        cluster_summaries = {}
+        metrics_by_name = {}
+        masks_by_name = {}
+        if cluster_experts:
+            cluster_assignments, cluster_summaries = build_expert_clusters(
+                moe_groups,
+                getattr(args, "moe_wanda_cluster_k", 15),
+                seed=getattr(args, "seed", 0),
+            )
+            cluster_by_name = _build_module_cluster_ids(subset, cluster_assignments)
+            for name in subset:
+                W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
+                if W_metric is None:
+                    raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
+                metrics_by_name[name] = W_metric
+            masks_by_name = build_cluster_global_masks(
+                metrics_by_name,
+                cluster_by_name,
+                args.sparsity_ratio,
+            )
+
         module_diagnostics = []
         for name in subset:
             print(f"pruning layer {i} name {name}")
             weight = subset[name].weight.data
-            W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
-            if W_metric is None:
-                raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
-
-            W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
-            if prune_n != 0:
-                # structured n:m sparsity
-                for ii in range(W_metric.shape[1]):
-                    if ii % prune_m == 0:
-                        tmp = W_metric[:,ii:(ii+prune_m)].float()
-                        W_mask.scatter_(1,ii+torch.topk(tmp, prune_n,dim=1, largest=False)[1], True)
+            if cluster_experts:
+                W_metric = metrics_by_name[name]
+                W_mask = masks_by_name[name]
             else:
-                sort_res = torch.sort(W_metric, dim=-1, stable=True)
+                W_metric = build_moe_wanda_metric(layer, name, subset[name], moe_collectors, moe_groups)
+                if W_metric is None:
+                    raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
 
-                if args.use_variant:
-                    # wanda variant 
-                    tmp_metric = torch.cumsum(sort_res[0], dim=1)
-                    sum_before = W_metric.sum(dim=1)
-
-                    alpha = 0.4
-                    alpha_hist = [0., 0.8]
-                    W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                    while (torch.abs(cur_sparsity - args.sparsity_ratio)>0.001) and (alpha_hist[1]-alpha_hist[0]>=0.001):
-                        if cur_sparsity > args.sparsity_ratio:
-                            alpha_new = (alpha + alpha_hist[0]) / 2.0
-                            alpha_hist[1] = alpha
-                        else:
-                            alpha_new = (alpha + alpha_hist[1]) / 2.0
-                            alpha_hist[0] = alpha
-
-                        alpha = alpha_new 
-                        W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
-                    print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
+                W_mask = (torch.zeros_like(W_metric) == 1)  ## initialize a mask to be all False
+                if prune_n != 0:
+                    # structured n:m sparsity
+                    for ii in range(W_metric.shape[1]):
+                        if ii % prune_m == 0:
+                            tmp = W_metric[:,ii:(ii+prune_m)].float()
+                            W_mask.scatter_(1,ii+torch.topk(tmp, prune_n,dim=1, largest=False)[1], True)
                 else:
-                    # unstructured pruning
-                    indices = sort_res[1][:,:int(W_metric.shape[1]*args.sparsity_ratio)]
-                    W_mask.scatter_(1, indices, True)
+                    sort_res = torch.sort(W_metric, dim=-1, stable=True)
+
+                    if args.use_variant:
+                        # wanda variant
+                        tmp_metric = torch.cumsum(sort_res[0], dim=1)
+                        sum_before = W_metric.sum(dim=1)
+
+                        alpha = 0.4
+                        alpha_hist = [0., 0.8]
+                        W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+                        while (torch.abs(cur_sparsity - args.sparsity_ratio)>0.001) and (alpha_hist[1]-alpha_hist[0]>=0.001):
+                            if cur_sparsity > args.sparsity_ratio:
+                                alpha_new = (alpha + alpha_hist[0]) / 2.0
+                                alpha_hist[1] = alpha
+                            else:
+                                alpha_new = (alpha + alpha_hist[1]) / 2.0
+                                alpha_hist[0] = alpha
+
+                            alpha = alpha_new
+                            W_mask, cur_sparsity = return_given_alpha(alpha, sort_res, W_metric, tmp_metric, sum_before)
+                        print(f"alpha found {alpha} sparsity {cur_sparsity:.6f}")
+                    else:
+                        # unstructured pruning
+                        indices = sort_res[1][:,:int(W_metric.shape[1]*args.sparsity_ratio)]
+                        W_mask.scatter_(1, indices, True)
 
             module_diag = _collect_mask_diagnostics(name, weight, W_mask, W_metric)
+            if cluster_experts:
+                module_diag["cluster_id"] = int(cluster_by_name[name])
             subset[name].weight.data[W_mask] = 0  ## set weights to zero 
             _finalize_weight_diagnostics(module_diag, subset[name].weight.data)
             module_diagnostics.append(module_diag)
@@ -381,6 +462,7 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             position_embeddings=position_embeddings,
         )
         projection_summary, top_zero_cols = _summarize_modules(module_diagnostics)
+        cluster_pool_summary = _summarize_cluster_pools(module_diagnostics) if cluster_experts else None
         top_module_name = top_zero_cols[0]["module_name"] if top_zero_cols else "none"
         top_module_ratio = top_zero_cols[0]["post_zero_col_ratio"] if top_zero_cols else 0.0
         layer_diag = {
@@ -392,6 +474,8 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
             "relative_delta_rms": float(relative_delta_rms),
             "projection_summary": projection_summary,
             "top_zero_col_modules": top_zero_cols,
+            "cluster_summary": cluster_summaries if cluster_experts else None,
+            "cluster_pool_summary": cluster_pool_summary,
         }
         _append_diagnostic(args, layer_diag)
         _append_diagnostic_summary(

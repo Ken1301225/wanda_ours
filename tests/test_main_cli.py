@@ -79,6 +79,27 @@ class MainCliTests(unittest.TestCase):
 
             self.assertEqual(args.moe_wanda_routing_power, 1.0)
 
+    def test_parser_accepts_moe_wanda_cluster_flags(self):
+        for build_parser in (build_main_parser, build_dsv2_parser):
+            parser = build_parser()
+
+            args = parser.parse_args(
+                [
+                    "--model",
+                    "dummy",
+                    "--sparsity_type",
+                    "unstructured",
+                    "--prune_method",
+                    "moe_wanda",
+                    "--moe_wanda_cluster_experts",
+                    "--moe_wanda_cluster_k",
+                    "15",
+                ]
+            )
+
+            self.assertTrue(args.moe_wanda_cluster_experts)
+            self.assertEqual(args.moe_wanda_cluster_k, 15)
+
     def test_prepare_run_outputs_writes_routing_settings(self):
         parser = build_main_parser()
 
@@ -97,6 +118,9 @@ class MainCliTests(unittest.TestCase):
                     "dense_softmax",
                     "--moe_wanda_routing_power",
                     "1.0",
+                    "--moe_wanda_cluster_experts",
+                    "--moe_wanda_cluster_k",
+                    "15",
                 ]
             )
 
@@ -110,10 +134,14 @@ class MainCliTests(unittest.TestCase):
             run_start = json.loads(diagnostics_path.read_text().strip())
             self.assertEqual(run_start["moe_wanda_routing_mode"], "dense_softmax")
             self.assertEqual(run_start["moe_wanda_routing_power"], 1.0)
+            self.assertTrue(run_start["moe_wanda_cluster_experts"])
+            self.assertEqual(run_start["moe_wanda_cluster_k"], 15)
 
             summary = summary_path.read_text().strip()
             self.assertIn("routing_mode=dense_softmax", summary)
             self.assertIn("routing_power=1.0", summary)
+            self.assertIn("cluster_experts=True", summary)
+            self.assertIn("cluster_k=15", summary)
 
     def test_moe_scripts_forward_routing_flags(self):
         for relpath in (
@@ -124,6 +152,10 @@ class MainCliTests(unittest.TestCase):
             script_text = Path(relpath).read_text()
             self.assertIn("--moe_wanda_routing_mode", script_text, msg=relpath)
             self.assertIn("--moe_wanda_routing_power", script_text, msg=relpath)
+            self.assertIn("--moe_wanda_cluster_experts", script_text, msg=relpath)
+            self.assertIn("--moe_wanda_cluster_k", script_text, msg=relpath)
+            self.assertIn("CLUSTER_EXPERTS", script_text, msg=relpath)
+            self.assertIn("CLUSTER_K", script_text, msg=relpath)
 
     def test_moe_scripts_use_anti_collapse_style_path_roots(self):
         expected_tokens = {
