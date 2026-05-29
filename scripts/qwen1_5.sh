@@ -13,7 +13,7 @@ SPARSITY_RATIO="${SPARSITY_RATIO:-0.7}"
 CUDA_DEVICE="${CUDA_DEVICE:-3}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-128}"
-ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
+ROUTING_MODE="${ROUTING_MODE:-topk}"
 ROUTING_POWER="${ROUTING_POWER:-1.5}"
 timestamp=$(date +"%Y%m%d_%H%M%S")
 
@@ -44,7 +44,7 @@ python main.py \
     --model "$MODEL" \
     --prune_method moe_wanda \
     --sparsity_ratio "$SPARSITY_RATIO" \
-    --sparsity_type unstructured \
+    --sparsity_type 2:4 \
     --seed "$SEED" \
     --save "$OUTPUT_DIR" \
     --save_model "$CHECKPOINT_DIR" \
@@ -52,3 +52,4 @@ python main.py \
     --moe_wanda_routing_mode "$ROUTING_MODE" \
     --moe_wanda_routing_power "$ROUTING_POWER" \
     "${CLUSTER_ARGS[@]}"
+

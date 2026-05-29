@@ -1,5 +1,6 @@
 import types
 import unittest
+import inspect
 
 from lib.moe_wanda import (
     attach_moe_wanda_hooks,
@@ -101,6 +102,12 @@ class MoeWandaTests(unittest.TestCase):
                 "mlp.experts.0.down_proj",
             },
         )
+
+    def test_build_cluster_global_masks_accepts_nm_pruning_arguments(self):
+        signature = inspect.signature(build_cluster_global_masks)
+
+        self.assertIn("prune_n", signature.parameters)
+        self.assertIn("prune_m", signature.parameters)
 
     @unittest.skipIf(torch is None, "torch is not installed in the current test runtime")
     def test_build_moe_wanda_metric_returns_none_for_non_expert_modules(self):
@@ -227,3 +234,35 @@ class MoeWandaTests(unittest.TestCase):
         self.assertEqual(int(masks["mlp.experts.1.up_proj"].sum().item()), 4)
         self.assertEqual(int(masks["mlp.experts.2.up_proj"].sum().item()), 0)
         self.assertEqual(int(masks["mlp.experts.3.up_proj"].sum().item()), 4)
+
+    @unittest.skipIf(torch is None, "torch is not installed in the current test runtime")
+    def test_build_cluster_global_masks_uses_independent_nm_masks_for_semi_structured(self):
+        metrics_by_name = {
+            "mlp.experts.0.up_proj": torch.tensor([[10.0, 1.0, 9.0, 2.0], [3.0, 8.0, 4.0, 7.0]]),
+            "mlp.experts.1.up_proj": torch.tensor([[0.1, 0.2, 0.3, 0.4], [5.0, 6.0, 7.0, 8.0]]),
+        }
+        cluster_by_name = {
+            "mlp.experts.0.up_proj": 0,
+            "mlp.experts.1.up_proj": 0,
+        }
+
+        masks = build_cluster_global_masks(
+            metrics_by_name,
+            cluster_by_name,
+            sparsity_ratio=0.5,
+            prune_n=2,
+            prune_m=4,
+        )
+
+        self.assertTrue(
+            torch.equal(
+                masks["mlp.experts.0.up_proj"],
+                torch.tensor([[False, True, False, True], [True, False, True, False]]),
+            )
+        )
+        self.assertTrue(
+            torch.equal(
+                masks["mlp.experts.1.up_proj"],
+                torch.tensor([[True, True, False, False], [True, True, False, False]]),
+            )
+        )

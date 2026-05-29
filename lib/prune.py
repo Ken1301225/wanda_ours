@@ -343,8 +343,6 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
     model.config.use_cache = False 
     cluster_experts = bool(getattr(args, "moe_wanda_cluster_experts", False))
 
-    if cluster_experts and prune_n != 0:
-        raise ValueError("Clustered MoE-Wanda pruning currently supports only unstructured sparsity.")
     if cluster_experts and args.use_variant:
         raise ValueError("Clustered MoE-Wanda pruning does not support --use_variant yet.")
 
@@ -396,6 +394,8 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
                 metrics_by_name,
                 cluster_by_name,
                 args.sparsity_ratio,
+                prune_n=prune_n,
+                prune_m=prune_m,
             )
 
         module_diagnostics = []
