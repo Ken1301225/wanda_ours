@@ -9,11 +9,11 @@ RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_cluster}"
 
 MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
 MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
-SPARSITY_RATIO="${SPARSITY_RATIO:-0.7}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
 CUDA_DEVICE="${CUDA_DEVICE:-3}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-128}"
-ROUTING_MODE="${ROUTING_MODE:-topk}"
+ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
 ROUTING_POWER="${ROUTING_POWER:-1.5}"
 timestamp=$(date +"%Y%m%d_%H%M%S")
 
@@ -52,4 +52,3 @@ python main.py \
     --moe_wanda_routing_mode "$ROUTING_MODE" \
     --moe_wanda_routing_power "$ROUTING_POWER" \
     "${CLUSTER_ARGS[@]}"
-
