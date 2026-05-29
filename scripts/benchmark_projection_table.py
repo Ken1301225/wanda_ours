@@ -15,12 +15,12 @@ from scripts.benchmark_model_inference import (
 )
 
 
-TABLE_ROWS = ("q/k/v/o_proj", "up/gate_proj", "down_proj")
+TABLE_ROWS = ("up/gate_proj", "down_proj")
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
-        description="Benchmark dense vs pruned 2:4 model projection latency and print a paper-style table."
+        description="Benchmark dense vs pruned 2:4 MoE expert projection latency and print a paper-style table."
     )
     parser.add_argument("--dense-model", required=True, help="Original dense HF model path.")
     parser.add_argument("--pruned-model", required=True, help="Already-pruned 2:4 HF checkpoint path.")
@@ -40,7 +40,7 @@ def build_parser():
     parser.add_argument(
         "--sparse-scope",
         choices=["moe_experts", "all_linear"],
-        default="all_linear",
+        default="moe_experts",
         help="Which Linear weights to convert when --semi-structured-sparse is enabled.",
     )
     parser.add_argument("--skip-2-4-check", action="store_true")
@@ -62,8 +62,8 @@ class ProjectionTimer:
 
     @staticmethod
     def group_for_name(name):
-        if name.endswith(("q_proj", "k_proj", "v_proj", "o_proj")):
-            return "q/k/v/o_proj"
+        if ".experts." not in name:
+            return None
         if name.endswith(("up_proj", "gate_proj")):
             return "up/gate_proj"
         if name.endswith("down_proj"):

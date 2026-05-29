@@ -67,24 +67,25 @@ class BenchmarkModelInferenceTests(unittest.TestCase):
         self.assertTrue(args.semi_structured_sparse)
 
     def test_projection_timer_groups_expected_module_names(self):
-        self.assertEqual(ProjectionTimer.group_for_name("model.layers.0.self_attn.q_proj"), "q/k/v/o_proj")
-        self.assertEqual(ProjectionTimer.group_for_name("model.layers.0.self_attn.o_proj"), "q/k/v/o_proj")
+        self.assertIsNone(ProjectionTimer.group_for_name("model.layers.0.self_attn.q_proj"))
+        self.assertIsNone(ProjectionTimer.group_for_name("model.layers.0.self_attn.o_proj"))
         self.assertEqual(ProjectionTimer.group_for_name("model.layers.0.mlp.experts.0.up_proj"), "up/gate_proj")
         self.assertEqual(ProjectionTimer.group_for_name("model.layers.0.mlp.experts.0.gate_proj"), "up/gate_proj")
         self.assertEqual(ProjectionTimer.group_for_name("model.layers.0.mlp.experts.0.down_proj"), "down_proj")
+        self.assertIsNone(ProjectionTimer.group_for_name("model.layers.0.mlp.shared_expert.up_proj"))
         self.assertIsNone(ProjectionTimer.group_for_name("model.embed_tokens"))
 
     def test_format_markdown_table_matches_requested_columns(self):
         table = format_markdown_table(
             {
-                "q/k/v/o_proj": {"dense_ms": 3.49, "pruned_ms": 2.14, "speedup": 1.63},
                 "up/gate_proj": {"dense_ms": 9.82, "pruned_ms": 6.10, "speedup": 1.61},
                 "down_proj": {"dense_ms": 9.92, "pruned_ms": 6.45, "speedup": 1.54},
             }
         )
 
         self.assertIn("| LLaMA Layer | Dense | 2:4 | Speedup |", table)
-        self.assertIn("| q/k/v/o_proj | 3.49 | 2.14 | 1.63x |", table)
+        self.assertNotIn("q/k/v/o_proj", table)
+        self.assertIn("| up/gate_proj | 9.82 | 6.10 | 1.61x |", table)
 
     def test_projection_table_example_script_loads_existing_checkpoints(self):
         script = Path("scripts/run_benchmark_projection_table.sh").read_text()

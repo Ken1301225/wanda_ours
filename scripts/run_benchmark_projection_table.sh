@@ -10,7 +10,7 @@ DTYPE="${DTYPE:-bfloat16}"
 WARMUP="${WARMUP:-3}"
 ITERS="${ITERS:-10}"
 DEVICE="${DEVICE:-cuda}"
-SPARSE_SCOPE="${SPARSE_SCOPE:-all_linear}"
+SPARSE_SCOPE="${SPARSE_SCOPE:-moe_experts}"
 USE_SPARSE_KERNEL="${USE_SPARSE_KERNEL:-true}"
 OUT_DIR="${OUT_DIR:-benchmark_projection_table}"
 
