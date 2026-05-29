@@ -174,7 +174,13 @@ def build_expert_clusters(groups, cluster_k, seed=0):
     return cluster_assignments, cluster_summaries
 
 
-def build_cluster_global_masks(metrics_by_name, cluster_by_name, sparsity_ratio):
+def build_cluster_global_masks(metrics_by_name, cluster_by_name, sparsity_ratio, prune_n=0, prune_m=0):
+    if prune_n != 0:
+        return {
+            name: _build_mask_from_metric(metric, sparsity_ratio, prune_n=prune_n, prune_m=prune_m)
+            for name, metric in metrics_by_name.items()
+        }
+
     grouped_names = {}
     for name, metric in metrics_by_name.items():
         parent_prefix, _, suffix = _split_expert_name(name)

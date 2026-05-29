@@ -150,8 +150,6 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
     model.config.use_cache = False 
     cluster_experts = bool(getattr(args, "moe_wanda_cluster_experts", False))
 
-    if cluster_experts and prune_n != 0:
-        raise ValueError("Clustered MoE-Wanda pruning currently supports only unstructured sparsity.")
     if cluster_experts and args.use_variant:
         raise ValueError("Clustered MoE-Wanda pruning does not support --use_variant yet.")
 
@@ -198,7 +196,13 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
                 if W_metric is None:
                     raise RuntimeError(f"Missing MoE-Wanda metric for expert module: {name}")
                 metrics_by_name[name] = W_metric
-            masks_by_name = build_cluster_global_masks(metrics_by_name, cluster_by_name, args.sparsity_ratio)
+            masks_by_name = build_cluster_global_masks(
+                metrics_by_name,
+                cluster_by_name,
+                args.sparsity_ratio,
+                prune_n=prune_n,
+                prune_m=prune_m,
+            )
 
         for name in subset:
             print(f"pruning layer {i} name {name}")

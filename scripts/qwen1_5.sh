@@ -5,7 +5,7 @@ set -euo pipefail
 # Edit these shared roots to match your environment.
 MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_dense_soft}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_cluster}"
 
 MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
 MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
@@ -13,13 +13,13 @@ SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
 CUDA_DEVICE="${CUDA_DEVICE:-0}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-128}"
-ROUTING_MODE="${ROUTING_MODE:-dense_softmax}"
+ROUTING_MODE="${ROUTING_MODE:-topk}"
 ROUTING_POWER="${ROUTING_POWER:-1.5}"
 timestamp=$(date +"%Y%m%d_%H%M%S")
 
 OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output_${timestamp}}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt_${timestamp}}"
-CLUSTER_EXPERTS="${CLUSTER_EXPERTS:-false}"
+CLUSTER_EXPERTS="${CLUSTER_EXPERTS:-true}"
 CLUSTER_K="${CLUSTER_K:-15}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
@@ -44,7 +44,7 @@ python main.py \
     --model "$MODEL" \
     --prune_method moe_wanda \
     --sparsity_ratio "$SPARSITY_RATIO" \
-    --sparsity_type unstructured \
+    --sparsity_type 2:4 \
     --seed "$SEED" \
     --save "$OUTPUT_DIR" \
     --save_model "$CHECKPOINT_DIR" \
@@ -52,3 +52,4 @@ python main.py \
     --moe_wanda_routing_mode "$ROUTING_MODE" \
     --moe_wanda_routing_power "$ROUTING_POWER" \
     "${CLUSTER_ARGS[@]}"
+
