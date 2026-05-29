@@ -48,6 +48,18 @@ def build_parser():
         help="Which Linear weights to convert when --semi-structured-sparse is enabled.",
     )
     parser.add_argument(
+        "--sparse-backend",
+        choices=["cutlass", "cusparselt"],
+        default="cusparselt",
+        help="PyTorch semi-structured sparse backend to request.",
+    )
+    parser.add_argument(
+        "--cusparselt-alg-id",
+        type=int,
+        default=0,
+        help="cuSPARSELt algorithm id used by PyTorch's CUSPARSELT semi-structured backend.",
+    )
+    parser.add_argument(
         "--skip-2-4-check",
         action="store_true",
         help="Skip explicit 2:4 legality checks before sparse conversion.",
@@ -92,30 +104,54 @@ def _has_2_4_pattern(torch, weight):
     return bool(torch.all(zeros_per_block == 2).item())
 
 
-def _convert_to_semi_structured_sparse(model, sparse_scope, skip_2_4_check):
+def _convert_to_semi_structured_sparse(
+    model,
+    sparse_scope,
+    skip_2_4_check,
+    sparse_backend="cusparselt",
+    cusparselt_alg_id=0,
+):
     torch, nn, _ = _import_runtime()
     try:
+        import torch.sparse.semi_structured as semi_structured
         from torch.sparse import to_sparse_semi_structured
     except ImportError as exc:
         raise RuntimeError("torch.sparse.to_sparse_semi_structured is unavailable.") from exc
 
+    previous_force_cutlass = semi_structured.SparseSemiStructuredTensor._FORCE_CUTLASS
+    previous_alg_id = getattr(semi_structured.SparseSemiStructuredTensorCUSPARSELT, "_DEFAULT_ALG_ID", 0)
+    semi_structured.SparseSemiStructuredTensor._FORCE_CUTLASS = sparse_backend == "cutlass"
+    if sparse_backend == "cusparselt":
+        semi_structured.SparseSemiStructuredTensorCUSPARSELT._DEFAULT_ALG_ID = int(cusparselt_alg_id)
+
     converted = []
     skipped = []
-    for name, module in model.named_modules():
-        if not isinstance(module, nn.Linear):
-            continue
-        if sparse_scope == "moe_experts" and not _is_moe_expert_linear(name):
-            continue
-        if not skip_2_4_check and not _has_2_4_pattern(torch, module.weight):
-            skipped.append({"name": name, "reason": "not_2_4"})
-            continue
-        try:
-            sparse_weight = to_sparse_semi_structured(module.weight.detach())
-            module.weight = nn.Parameter(sparse_weight, requires_grad=False)
-            converted.append(name)
-        except Exception as exc:
-            skipped.append({"name": name, "reason": str(exc)})
-    return {"converted_count": len(converted), "converted": converted, "skipped": skipped}
+    try:
+        for name, module in model.named_modules():
+            if not isinstance(module, nn.Linear):
+                continue
+            if sparse_scope == "moe_experts" and not _is_moe_expert_linear(name):
+                continue
+            if not skip_2_4_check and not _has_2_4_pattern(torch, module.weight):
+                skipped.append({"name": name, "reason": "not_2_4"})
+                continue
+            try:
+                sparse_weight = to_sparse_semi_structured(module.weight.detach())
+                module.weight = nn.Parameter(sparse_weight, requires_grad=False)
+                converted.append(name)
+            except Exception as exc:
+                skipped.append({"name": name, "reason": str(exc)})
+    finally:
+        semi_structured.SparseSemiStructuredTensor._FORCE_CUTLASS = previous_force_cutlass
+        semi_structured.SparseSemiStructuredTensorCUSPARSELT._DEFAULT_ALG_ID = previous_alg_id
+
+    return {
+        "backend": sparse_backend,
+        "cusparselt_alg_id": int(cusparselt_alg_id),
+        "converted_count": len(converted),
+        "converted": converted,
+        "skipped": skipped,
+    }
 
 
 def _load_model(args):
@@ -218,6 +254,8 @@ def run_benchmark(args):
             model,
             args.sparse_scope,
             args.skip_2_4_check,
+            sparse_backend=args.sparse_backend,
+            cusparselt_alg_id=args.cusparselt_alg_id,
         )
 
     prompt_lengths = parse_int_list(args.prompt_lengths)
@@ -227,6 +265,8 @@ def run_benchmark(args):
         "dtype": args.dtype,
         "semi_structured_sparse": bool(args.semi_structured_sparse),
         "sparse_scope": args.sparse_scope,
+        "sparse_backend": args.sparse_backend,
+        "cusparselt_alg_id": args.cusparselt_alg_id,
         "sparse_report": sparse_report,
         "measurements": [],
     }

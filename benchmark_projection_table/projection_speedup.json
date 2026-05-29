@@ -1,0 +1,22 @@
+{
+  "batch_size": 32,
+  "comparison": {
+    "down_proj": {
+      "dense_ms": 79.40167541867122,
+      "pruned_ms": 79.11449609231204,
+      "speedup": 1.0036299204386525
+    },
+    "up/gate_proj": {
+      "dense_ms": 192.42603624798357,
+      "pruned_ms": 192.70947496648878,
+      "speedup": 0.9985291915794254
+    }
+  },
+  "dense_model": "/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/",
+  "iters": 20,
+  "prompt_length": 512,
+  "pruned_model": "/data1/ldk/nlp/wanda_moe_cluster/ckpt_20260529_155156/",
+  "semi_structured_sparse": false,
+  "sparse_report": null,
+  "sparse_scope": "moe_experts"
+}

@@ -11,7 +11,9 @@ WARMUP="${WARMUP:-3}"
 ITERS="${ITERS:-20}"
 DEVICE="${DEVICE:-cuda}"
 SPARSE_SCOPE="${SPARSE_SCOPE:-moe_experts}"
-USE_SPARSE_KERNEL="${USE_SPARSE_KERNEL:-false}"
+SPARSE_BACKEND="${SPARSE_BACKEND:-cusparselt}"
+CUSPARSELT_ALG_ID="${CUSPARSELT_ALG_ID:-0}"
+USE_SPARSE_KERNEL="${USE_SPARSE_KERNEL:-true}"
 OUT_DIR="${OUT_DIR:-benchmark_projection_table}"
 
 export CUDA_VISIBLE_DEVICES="3"
@@ -24,7 +26,12 @@ fi
 
 SPARSE_ARGS=()
 if [[ "$USE_SPARSE_KERNEL" == "true" ]]; then
-  SPARSE_ARGS+=(--semi-structured-sparse --sparse-scope "$SPARSE_SCOPE")
+  SPARSE_ARGS+=(
+    --semi-structured-sparse
+    --sparse-scope "$SPARSE_SCOPE"
+    --sparse-backend "$SPARSE_BACKEND"
+    --cusparselt-alg-id "$CUSPARSELT_ALG_ID"
+  )
 fi
 
 python scripts/benchmark_projection_table.py \
