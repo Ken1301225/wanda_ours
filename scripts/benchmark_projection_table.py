@@ -5,7 +5,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from scripts.benchmark_model_inference import (
+from benchmark_model_inference import (
     _convert_to_semi_structured_sparse,
     _import_runtime,
     _load_model,
@@ -14,7 +14,6 @@ from scripts.benchmark_model_inference import (
     _sync,
 )
 
-
 TABLE_ROWS = ("up/gate_proj", "down_proj")
 
 
@@ -22,8 +21,12 @@ def build_parser():
     parser = argparse.ArgumentParser(
         description="Benchmark dense vs pruned 2:4 MoE expert projection latency and print a paper-style table."
     )
-    parser.add_argument("--dense-model", required=True, help="Original dense HF model path.")
-    parser.add_argument("--pruned-model", required=True, help="Already-pruned 2:4 HF checkpoint path.")
+    parser.add_argument(
+        "--dense-model", required=True, help="Original dense HF model path."
+    )
+    parser.add_argument(
+        "--pruned-model", required=True, help="Already-pruned 2:4 HF checkpoint path."
+    )
     parser.add_argument("--cache-dir", default="llm_weights")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", choices=["float16", "bfloat16"], default="bfloat16")
@@ -77,8 +80,12 @@ class ProjectionTimer:
             group = self.group_for_name(name)
             if group is None:
                 continue
-            self.handles.append(module.register_forward_pre_hook(self._make_pre_hook(group)))
-            self.handles.append(module.register_forward_hook(self._make_post_hook(group)))
+            self.handles.append(
+                module.register_forward_pre_hook(self._make_pre_hook(group))
+            )
+            self.handles.append(
+                module.register_forward_hook(self._make_post_hook(group))
+            )
 
     def remove(self):
         for handle in self.handles:
@@ -115,7 +122,9 @@ class ProjectionTimer:
                 started = self.cpu_starts.pop(id(module), None)
                 if started is not None:
                     started_group, start_time = started
-                    self.cpu_elapsed_ms[started_group] += (time.perf_counter() - start_time) * 1000.0
+                    self.cpu_elapsed_ms[started_group] += (
+                        time.perf_counter() - start_time
+                    ) * 1000.0
 
         return hook
 
@@ -124,7 +133,9 @@ class ProjectionTimer:
         if self.device.type == "cuda":
             _sync(self.torch, self.device)
             for group, pairs in self.events.items():
-                totals[group] = sum(start.elapsed_time(end) for start, end in pairs if end is not None)
+                totals[group] = sum(
+                    start.elapsed_time(end) for start, end in pairs if end is not None
+                )
         else:
             for group, value in self.cpu_elapsed_ms.items():
                 totals[group] = value
@@ -245,9 +256,13 @@ def main():
     print(table)
     if results.get("sparse_report") is not None:
         report = results["sparse_report"]
-        print(f"\nsparse_conversion converted={report['converted_count']} skipped={len(report['skipped'])}")
+        print(
+            f"\nsparse_conversion converted={report['converted_count']} skipped={len(report['skipped'])}"
+        )
     if args.output_json:
-        Path(args.output_json).write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
+        Path(args.output_json).write_text(
+            json.dumps(results, indent=2, sort_keys=True) + "\n"
+        )
     if args.output_markdown:
         Path(args.output_markdown).write_text(table + "\n")
 
