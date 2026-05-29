@@ -29,6 +29,10 @@ class BenchmarkModelInferenceTests(unittest.TestCase):
                 "--semi-structured-sparse",
                 "--sparse-scope",
                 "moe_experts",
+                "--sparse-backend",
+                "cusparselt",
+                "--cusparselt-alg-id",
+                "1",
             ]
         )
 
@@ -38,6 +42,8 @@ class BenchmarkModelInferenceTests(unittest.TestCase):
         self.assertEqual(args.decode_steps, 16)
         self.assertTrue(args.semi_structured_sparse)
         self.assertEqual(args.sparse_scope, "moe_experts")
+        self.assertEqual(args.sparse_backend, "cusparselt")
+        self.assertEqual(args.cusparselt_alg_id, 1)
 
     def test_example_script_compares_dense_mask_and_sparse_kernel(self):
         script = Path("scripts/run_benchmark_model_inference.sh").read_text()
@@ -59,12 +65,15 @@ class BenchmarkModelInferenceTests(unittest.TestCase):
                 "--pruned-model",
                 "/tmp/pruned",
                 "--semi-structured-sparse",
+                "--sparse-backend",
+                "cusparselt",
             ]
         )
 
         self.assertEqual(args.dense_model, "/tmp/dense")
         self.assertEqual(args.pruned_model, "/tmp/pruned")
         self.assertTrue(args.semi_structured_sparse)
+        self.assertEqual(args.sparse_backend, "cusparselt")
 
     def test_projection_timer_groups_expected_module_names(self):
         self.assertIsNone(ProjectionTimer.group_for_name("model.layers.0.self_attn.q_proj"))
@@ -93,6 +102,7 @@ class BenchmarkModelInferenceTests(unittest.TestCase):
         self.assertIn("DENSE_MODEL", script)
         self.assertIn("PRUNED_MODEL", script)
         self.assertIn("scripts/benchmark_projection_table.py", script)
+        self.assertIn("SPARSE_BACKEND", script)
         self.assertNotIn("python main.py", script)
 
 

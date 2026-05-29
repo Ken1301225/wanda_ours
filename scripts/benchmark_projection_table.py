@@ -43,6 +43,13 @@ def build_parser():
         default="moe_experts",
         help="Which Linear weights to convert when --semi-structured-sparse is enabled.",
     )
+    parser.add_argument(
+        "--sparse-backend",
+        choices=["cutlass", "cusparselt"],
+        default="cusparselt",
+        help="PyTorch semi-structured sparse backend to request.",
+    )
+    parser.add_argument("--cusparselt-alg-id", type=int, default=0)
     parser.add_argument("--skip-2-4-check", action="store_true")
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-markdown", default=None)
@@ -149,6 +156,8 @@ def _load_benchmark_model(model_path, args, convert_sparse):
             model,
             args.sparse_scope,
             args.skip_2_4_check,
+            sparse_backend=args.sparse_backend,
+            cusparselt_alg_id=args.cusparselt_alg_id,
         )
     return model, sparse_report
 
@@ -229,6 +238,8 @@ def run_benchmark(args):
         "pruned_model": args.pruned_model,
         "semi_structured_sparse": bool(args.semi_structured_sparse),
         "sparse_scope": args.sparse_scope,
+        "sparse_backend": args.sparse_backend,
+        "cusparselt_alg_id": args.cusparselt_alg_id,
         "sparse_report": sparse_report,
         "batch_size": args.batch_size,
         "prompt_length": args.prompt_length,
