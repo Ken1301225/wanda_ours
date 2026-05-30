@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export CUDA_VISIBLE_DEVICES="3"
 MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
 RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_ablation}"
