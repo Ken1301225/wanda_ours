@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES="3"
 MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
 RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_ablation}"
@@ -10,8 +9,8 @@ MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
 MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
 SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
 SPARSITY_TYPE="${SPARSITY_TYPE:-unstructured}"
-CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-0}}"
-MAX_PARALLEL="${MAX_PARALLEL:-1}"
+CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-3}}"
+MAX_PARALLEL="${MAX_PARALLEL:-2}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-128}"
 SAVE_MODEL="${SAVE_MODEL:-false}"

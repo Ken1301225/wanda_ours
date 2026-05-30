@@ -1,0 +1,26 @@
+run_start method=moe_wanda model=/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9 sparsity=0.5 nsamples=128 routing_mode=dense_softmax routing_power=1.5 cluster_experts=False cluster_k=15
+layer=0 delta_rms=0.003288 relative_delta_rms=0.129983 top_zero_col_module=mlp.experts.45.down_proj top_zero_col_ratio=0.078835
+layer=1 delta_rms=0.006064 relative_delta_rms=0.073595 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=2 delta_rms=0.005496 relative_delta_rms=0.062080 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=3 delta_rms=0.006557 relative_delta_rms=0.069026 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=4 delta_rms=0.007718 relative_delta_rms=0.075198 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=5 delta_rms=0.009121 relative_delta_rms=0.084025 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=6 delta_rms=0.022662 relative_delta_rms=0.098122 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=7 delta_rms=0.011982 relative_delta_rms=0.053837 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=8 delta_rms=0.013259 relative_delta_rms=0.056674 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=9 delta_rms=0.014041 relative_delta_rms=0.057864 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=10 delta_rms=0.015851 relative_delta_rms=0.061446 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=11 delta_rms=0.017769 relative_delta_rms=0.064132 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=12 delta_rms=0.021067 relative_delta_rms=0.069457 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=13 delta_rms=0.025130 relative_delta_rms=0.073457 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=14 delta_rms=0.031910 relative_delta_rms=0.078970 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=15 delta_rms=0.039711 relative_delta_rms=0.081078 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=16 delta_rms=0.047264 relative_delta_rms=0.081926 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=17 delta_rms=0.056905 relative_delta_rms=0.081013 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=18 delta_rms=0.064707 relative_delta_rms=0.076668 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=19 delta_rms=0.075479 relative_delta_rms=0.076388 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=20 delta_rms=0.087985 relative_delta_rms=0.077298 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=21 delta_rms=0.100024 relative_delta_rms=0.077287 top_zero_col_module=mlp.experts.0.gate_proj top_zero_col_ratio=0.000000
+layer=22 delta_rms=0.111057 relative_delta_rms=0.071951 top_zero_col_module=mlp.experts.4.down_proj top_zero_col_ratio=0.000710
+layer=23 delta_rms=0.114420 relative_delta_rms=0.047804 top_zero_col_module=mlp.experts.5.down_proj top_zero_col_ratio=0.000710
+run_complete actual_sparsity=0.500000 ppl_test=7.750297
