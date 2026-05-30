@@ -1,0 +1,28 @@
+{
+  "backend": "cusparselt",
+  "by_tokens": {
+    "65536": {
+      "comparison": {
+        "down_proj": {
+          "dense_ms": 1.8019461313883465,
+          "sparse_ms": 1.6317749341328942,
+          "speedup": 1.1042859488130814
+        },
+        "up/gate_proj": {
+          "dense_ms": 1.7671327968438464,
+          "sparse_ms": 1.566731735070547,
+          "speedup": 1.1279102588448402
+        }
+      },
+      "conversion": {
+        "converted": 128,
+        "skipped": []
+      }
+    }
+  },
+  "cusparselt_alg_id": 0,
+  "dense_model": "/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/",
+  "dtype": "bfloat16",
+  "max_modules_per_group": 64,
+  "pruned_model": "/data1/ldk/SPNN/qwen1_5/wanda/ckpt_24_20260529_165448/"
+}
