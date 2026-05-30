@@ -146,7 +146,6 @@ class MainCliTests(unittest.TestCase):
     def test_moe_scripts_forward_routing_flags(self):
         for relpath in (
             "scripts/qwen1_5.sh",
-            "scripts/qwen1_5_moe_wanda.sh",
             "scripts/dsv2.sh",
         ):
             script_text = Path(relpath).read_text()
@@ -160,7 +159,6 @@ class MainCliTests(unittest.TestCase):
     def test_moe_scripts_use_anti_collapse_style_path_roots(self):
         expected_tokens = {
             "scripts/qwen1_5.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
-            "scripts/qwen1_5_moe_wanda.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
             "scripts/dsv2.sh": ["MODEL_ROOT", "HF_CACHE_ROOT", "RUN_ROOT", "OUTPUT_DIR", "CHECKPOINT_DIR"],
         }
 
@@ -181,3 +179,6 @@ class MainCliTests(unittest.TestCase):
         self.assertIn("2.0", script_text)
         self.assertIn("CLUSTER_KS", script_text)
         self.assertIn("--moe_wanda_cluster_experts", script_text)
+        self.assertIn("CUDA_DEVICES", script_text)
+        self.assertIn("MAX_PARALLEL", script_text)
+        self.assertIn("wait -n", script_text)
