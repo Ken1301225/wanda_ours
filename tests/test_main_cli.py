@@ -168,3 +168,16 @@ class MainCliTests(unittest.TestCase):
             script_text = Path(relpath).read_text()
             for token in tokens:
                 self.assertIn(token, script_text, msg=f"{relpath} missing {token}")
+
+    def test_qwen_moe_wanda_ablation_script_covers_routing_power_and_clustering(self):
+        script_text = Path("scripts/ablate_moe_wanda_qwen1_5.sh").read_text()
+
+        self.assertIn("run_case", script_text)
+        self.assertIn("topk", script_text)
+        self.assertIn("dense_softmax", script_text)
+        self.assertIn("0.5", script_text)
+        self.assertIn("1.0", script_text)
+        self.assertIn("1.5", script_text)
+        self.assertIn("2.0", script_text)
+        self.assertIn("CLUSTER_KS", script_text)
+        self.assertIn("--moe_wanda_cluster_experts", script_text)
