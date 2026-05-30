@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export CUDA_VISIBLE_DEVICES="0"
+export CUDA_VISIBLE_DEVICES="2,3"
 DENSE_MODEL="${DENSE_MODEL:-/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/}"
-PRUNED_MODEL="${PRUNED_MODEL:-/data1/ldk/SPNN/qwen1_5/wanda/ckpt_24_20260529_165448/}"
+PRUNED_MODEL="${PRUNED_MODEL:-/data1/ldk/nlp/wanda_moe_cluster/ckpt_20260529_155156/}"
 CACHE_DIR="${CACHE_DIR:-/data1/ldk/huggingface}"
-BATCH_SIZE="${BATCH_SIZE:-32}"
+BATCH_SIZE="${BATCH_SIZE:-8}"
 PROMPT_LENGTH="${PROMPT_LENGTH:-2048}"
 TOKENS="${TOKENS:-$((BATCH_SIZE * PROMPT_LENGTH))}"
 DTYPE="${DTYPE:-bfloat16}"
@@ -13,8 +13,8 @@ DEVICE="${DEVICE:-cuda}"
 BACKEND="${BACKEND:-cusparselt}"
 CUSPARSELT_ALG_ID="${CUSPARSELT_ALG_ID:-0}"
 WARMUP="${WARMUP:-3}"
-ITERS="${ITERS:-30}"
-MAX_MODULES_PER_GROUP="${MAX_MODULES_PER_GROUP:-64}"
+ITERS="${ITERS:-60}"
+MAX_MODULES_PER_GROUP="${MAX_MODULES_PER_GROUP:-128}"
 OUT_DIR="${OUT_DIR:-benchmark_projection_table}"
 
 mkdir -p "$OUT_DIR"
@@ -36,5 +36,5 @@ python scripts/benchmark_linear_gemm_2_4.py \
   --warmup "$WARMUP" \
   --iters "$ITERS" \
   --max-modules-per-group "$MAX_MODULES_PER_GROUP" \
-  --output-json "$OUT_DIR/linear_gemm_speedup_wanda_vanilla.json" \
-  --output-markdown "$OUT_DIR/linear_gemm_speedup_vanilla.md"
+  --output-json "$OUT_DIR/linear_gemm_speedup_8.json" \
+  --output-markdown "$OUT_DIR/linear_gemm_speedup_8.md"

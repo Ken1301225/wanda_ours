@@ -1,21 +1,21 @@
 {
   "backend": "cusparselt",
   "by_tokens": {
-    "65536": {
+    "8192": {
       "comparison": {
         "down_proj": {
-          "dense_ms": 1.8459194640318548,
-          "sparse_ms": 1.6670805354913074,
-          "speedup": 1.1072767180308067
+          "dense_ms": 0.2483005326241255,
+          "sparse_ms": 0.6613818675279618,
+          "speedup": 0.37542688243358574
         },
         "up/gate_proj": {
-          "dense_ms": 1.8112655957539876,
-          "sparse_ms": 1.599119999011358,
-          "speedup": 1.132663963225891
+          "dense_ms": 0.2636361331989368,
+          "sparse_ms": 0.6534812028209368,
+          "speedup": 0.4034333842517225
         }
       },
       "conversion": {
-        "converted": 128,
+        "converted": 256,
         "skipped": []
       }
     }
@@ -23,6 +23,6 @@
   "cusparselt_alg_id": 0,
   "dense_model": "/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9/",
   "dtype": "bfloat16",
-  "max_modules_per_group": 64,
+  "max_modules_per_group": 128,
   "pruned_model": "/data1/ldk/nlp/wanda_moe_cluster/ckpt_20260529_155156/"
 }
