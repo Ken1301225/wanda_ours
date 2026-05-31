@@ -1,0 +1,15 @@
+[2026-05-28 13:42:14] Runtime args: Namespace(model_id='Qwen/Qwen1.5-MoE-A2.7B', model_snapshotpath='/data1/ldk/model/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9', run_seed=42, run_measure_memory=False, run_eval_dataset='arc,boolq,hellaswag,mmlu,obqa,piqa,rte,winogrande', origin_is_eval=False, origin_load_origin_model=False, prune_is_prune=False, prune_save_dir='./pruned_model_checkpoint', prune_strategy='sequence', prune_group_size=4, prune_is_eval=False, prune_save=False, prune_save_model_dir='./prune_model_ckpt', cluster_method='greedy', weight_cluster_method='balanced_hac', cluster_datasets='c4', cluster_nsamples=128, cluster_seqlen=2048, cluster_cache_path=None, load_is_load=True, load_local_path='/data1/ldk/nlp/wanda_moe_cluster/ckpt_20260528_113752/', load_is_eval=True, log_file='/home/amax/ldk/SPNN/output/qwen/load-wanda-cluster_soft_pow_1_5_20260528-134210.log', arc_batch=128, mmlu_batch=64, gsm8k_batch=200, piqa_batch=128, boolq_batch=64, hellaswag_batch=200, obqa_batch=128, rte_batch=128, winogrande_batch=128)
+[2026-05-28 13:42:22] 
+=== Evaluation Results ===
+[2026-05-28 13:43:43] ARC: {'arc_challenge': {'alias': 'arc_challenge', 'acc,none': 0.4069965870307167, 'acc_stderr,none': 0.014356399418009123, 'acc_norm,none': 0.44283276450511944, 'acc_norm_stderr,none': 0.01451557387334889}, 'arc_easy': {'alias': 'arc_easy', 'acc,none': 0.7436868686868687, 'acc_stderr,none': 0.008958775997918361, 'acc_norm,none': 0.7154882154882155, 'acc_norm_stderr,none': 0.009258050925618821}}
+[2026-05-28 13:51:20] MMLU humanities: acc=0.5290, tasks=13, samples=4705
+[2026-05-28 13:51:20] MMLU stem: acc=0.5062, tasks=19, samples=3153
+[2026-05-28 13:51:20] MMLU social_sciences: acc=0.6864, tasks=12, samples=3077
+[2026-05-28 13:51:20] MMLU other: acc=0.6730, tasks=13, samples=3107
+[2026-05-28 13:51:20] MMLU overall: acc=0.5902, tasks=57, samples=14042
+[2026-05-28 13:51:53] PIQA: {'piqa': {'alias': 'piqa', 'acc,none': 0.7921653971708379, 'acc_stderr,none': 0.009466997964536396, 'acc_norm,none': 0.7932535364526659, 'acc_norm_stderr,none': 0.009448665514183264}}
+[2026-05-28 13:52:57] BoolQ: {'boolq': {'alias': 'boolq', 'acc,none': 0.7755351681957187, 'acc_stderr,none': 0.007297388057708006}}
+[2026-05-28 13:56:53] HellaSwag: {'hellaswag': {'alias': 'hellaswag', 'acc,none': 0.5588528181637125, 'acc_stderr,none': 0.004955095096264708, 'acc_norm,none': 0.7530372435769767, 'acc_norm_stderr,none': 0.0043036354511156874}}
+[2026-05-28 13:57:20] OBQA: {'openbookqa': {'alias': 'openbookqa', 'acc,none': 0.316, 'acc_stderr,none': 0.02081235951585586, 'acc_norm,none': 0.424, 'acc_norm_stderr,none': 0.022122993778135407}}
+[2026-05-28 13:57:39] RTE: {'rte': {'alias': 'rte', 'acc,none': 0.7148014440433214, 'acc_stderr,none': 0.027177645574521122}}
+[2026-05-28 13:58:09] WinoGrande: {'winogrande': {'alias': 'winogrande', 'acc,none': 0.6906077348066298, 'acc_stderr,none': 0.012991329330822993}}
