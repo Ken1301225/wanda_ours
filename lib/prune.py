@@ -35,6 +35,10 @@ def _append_diagnostic_summary(args, line):
         print(line, file=f, flush=True)
 
 
+def _diagnostics_enabled(args):
+    return bool(getattr(args, "diagnostics", True))
+
+
 def _parse_module_location(name):
     parts = name.split(".")
     info = {
@@ -217,6 +221,24 @@ def _layer_delta_stats(layer, inps, outs, args, attention_mask=None, position_id
     relative_delta_rms = delta_rms / max(base_rms, 1e-12)
     return delta_rms, base_rms, relative_delta_rms
 
+
+def _advance_layer_outputs(layer, inps, outs, args, attention_mask=None, position_ids=None, position_embeddings=None):
+    for j in range(args.nsamples):
+        with torch.no_grad():
+            if position_embeddings is None:
+                outs[j] = layer(
+                    inps[j].unsqueeze(0),
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                )[0]
+            else:
+                outs[j] = layer(
+                    inps[j].unsqueeze(0),
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    position_embeddings=position_embeddings,
+                )[0]
+
 def find_layers(module, layers=[nn.Linear], name=''):
     """
     Recursively find the layers of a certain type in a module.
@@ -342,6 +364,7 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
     use_cache = model.config.use_cache 
     model.config.use_cache = False 
     cluster_experts = bool(getattr(args, "moe_wanda_cluster_experts", False))
+    diagnostics_enabled = _diagnostics_enabled(args)
 
     if cluster_experts and args.use_variant:
         raise ValueError("Clustered MoE-Wanda pruning does not support --use_variant yet.")
@@ -444,44 +467,57 @@ def prune_moe_wanda(args, model, tokenizer, device=torch.device("cuda:0"), prune
                         indices = sort_res[1][:,:int(W_metric.shape[1]*args.sparsity_ratio)]
                         W_mask.scatter_(1, indices, True)
 
-            module_diag = _collect_mask_diagnostics(name, weight, W_mask, W_metric)
-            if cluster_experts:
-                module_diag["cluster_id"] = int(cluster_by_name[name])
+            if diagnostics_enabled:
+                module_diag = _collect_mask_diagnostics(name, weight, W_mask, W_metric)
+                if cluster_experts:
+                    module_diag["cluster_id"] = int(cluster_by_name[name])
             subset[name].weight.data[W_mask] = 0  ## set weights to zero 
-            _finalize_weight_diagnostics(module_diag, subset[name].weight.data)
-            module_diagnostics.append(module_diag)
-            _append_diagnostic(args, {"event": "module_prune", **module_diag})
+            if diagnostics_enabled:
+                _finalize_weight_diagnostics(module_diag, subset[name].weight.data)
+                module_diagnostics.append(module_diag)
+                _append_diagnostic(args, {"event": "module_prune", **module_diag})
 
-        delta_rms, base_rms, relative_delta_rms = _layer_delta_stats(
-            layer,
-            inps,
-            outs,
-            args,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            position_embeddings=position_embeddings,
-        )
-        projection_summary, top_zero_cols = _summarize_modules(module_diagnostics)
-        cluster_pool_summary = _summarize_cluster_pools(module_diagnostics) if cluster_experts else None
-        top_module_name = top_zero_cols[0]["module_name"] if top_zero_cols else "none"
-        top_module_ratio = top_zero_cols[0]["post_zero_col_ratio"] if top_zero_cols else 0.0
-        layer_diag = {
-            "event": "layer_summary",
-            "layer": i,
-            "module_count": len(module_diagnostics),
-            "delta_rms": float(delta_rms),
-            "output_rms_before": float(base_rms),
-            "relative_delta_rms": float(relative_delta_rms),
-            "projection_summary": projection_summary,
-            "top_zero_col_modules": top_zero_cols,
-            "cluster_summary": cluster_summaries if cluster_experts else None,
-            "cluster_pool_summary": cluster_pool_summary,
-        }
-        _append_diagnostic(args, layer_diag)
-        _append_diagnostic_summary(
-            args,
-            f"layer={i} delta_rms={delta_rms:.6f} relative_delta_rms={relative_delta_rms:.6f} top_zero_col_module={top_module_name} top_zero_col_ratio={top_module_ratio:.6f}",
-        )
+        if diagnostics_enabled:
+            delta_rms, base_rms, relative_delta_rms = _layer_delta_stats(
+                layer,
+                inps,
+                outs,
+                args,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings,
+            )
+            projection_summary, top_zero_cols = _summarize_modules(module_diagnostics)
+            cluster_pool_summary = _summarize_cluster_pools(module_diagnostics) if cluster_experts else None
+            top_module_name = top_zero_cols[0]["module_name"] if top_zero_cols else "none"
+            top_module_ratio = top_zero_cols[0]["post_zero_col_ratio"] if top_zero_cols else 0.0
+            layer_diag = {
+                "event": "layer_summary",
+                "layer": i,
+                "module_count": len(module_diagnostics),
+                "delta_rms": float(delta_rms),
+                "output_rms_before": float(base_rms),
+                "relative_delta_rms": float(relative_delta_rms),
+                "projection_summary": projection_summary,
+                "top_zero_col_modules": top_zero_cols,
+                "cluster_summary": cluster_summaries if cluster_experts else None,
+                "cluster_pool_summary": cluster_pool_summary,
+            }
+            _append_diagnostic(args, layer_diag)
+            _append_diagnostic_summary(
+                args,
+                f"layer={i} delta_rms={delta_rms:.6f} relative_delta_rms={relative_delta_rms:.6f} top_zero_col_module={top_module_name} top_zero_col_ratio={top_module_ratio:.6f}",
+            )
+        else:
+            _advance_layer_outputs(
+                layer,
+                inps,
+                outs,
+                args,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                position_embeddings=position_embeddings,
+            )
         inps, outs = outs, inps
 
     model.config.use_cache = use_cache 

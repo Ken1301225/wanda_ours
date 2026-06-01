@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/model}"
+MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/huggingface/hub}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/wanda_moe_ablation}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/deepseekv2/moe_wanda_ablation}"
 
-MODEL_REPO="${MODEL_REPO:-Qwen/Qwen1.5-MoE-A2.7B}"
-MODEL="${MODEL:-${MODEL_ROOT}/Qwen1.5/models--Qwen--Qwen1.5-MoE-A2.7B/snapshots/1a758c50ecb6350748b9ce0a99d2352fd9fc11c9}"
-SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
+MODEL_REPO="${MODEL_REPO:-deepseek-ai/DeepSeek-V2-Lite}"
+MODEL="${MODEL:-${MODEL_ROOT}/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.75}"
 SPARSITY_TYPE="${SPARSITY_TYPE:-unstructured}"
-CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-3}}"
-MAX_PARALLEL="${MAX_PARALLEL:-2}"
+CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-1}}"
+MAX_PARALLEL="${MAX_PARALLEL:-1}"
 SEED="${SEED:-0}"
-NSAMPLES="${NSAMPLES:-128}"
+NSAMPLES="${NSAMPLES:-512}"
 SAVE_MODEL="${SAVE_MODEL:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-DIAGNOSTICS="${DIAGNOSTICS:-true}"
+DIAGNOSTICS="${DIAGNOSTICS:-false}"
 
 ROUTING_POWERS="${ROUTING_POWERS:-0.5 1.0 1.5 2.0}"
 CLUSTER_KS="${CLUSTER_KS:-5 10 15 30}"
@@ -58,7 +58,7 @@ run_case() {
   fi
 
   local cmd=(
-    python main.py
+    python main_dsv2.py
     --model "$MODEL"
     --prune_method moe_wanda
     --sparsity_ratio "$SPARSITY_RATIO"

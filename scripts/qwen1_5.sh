@@ -21,6 +21,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${RUN_ROOT}/output_${timestamp}}"
 CHECKPOINT_DIR="${CHECKPOINT_DIR:-${RUN_ROOT}/ckpt_${timestamp}}"
 CLUSTER_EXPERTS="${CLUSTER_EXPERTS:-true}"
 CLUSTER_K="${CLUSTER_K:-15}"
+DIAGNOSTICS="${DIAGNOSTICS:-true}"
 
 export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 export HF_HOME="${HF_HOME:-$HF_CACHE_ROOT}"
@@ -32,6 +33,11 @@ mkdir -p "$OUTPUT_DIR" "$CHECKPOINT_DIR"
 CLUSTER_ARGS=(--moe_wanda_cluster_k "$CLUSTER_K")
 if [ "$CLUSTER_EXPERTS" = "true" ]; then
     CLUSTER_ARGS+=(--moe_wanda_cluster_experts)
+fi
+
+DIAGNOSTIC_ARGS=()
+if [ "$DIAGNOSTICS" = "false" ]; then
+    DIAGNOSTIC_ARGS=(--no_diagnostics)
 fi
 
 if [ ! -d "$MODEL" ]; then
@@ -51,4 +57,5 @@ python main.py \
     --nsamples "$NSAMPLES" \
     --moe_wanda_routing_mode "$ROUTING_MODE" \
     --moe_wanda_routing_power "$ROUTING_POWER" \
-    "${CLUSTER_ARGS[@]}"
+    "${CLUSTER_ARGS[@]}" \
+    "${DIAGNOSTIC_ARGS[@]}"

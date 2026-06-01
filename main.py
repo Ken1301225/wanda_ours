@@ -39,7 +39,7 @@ def append_run_summary(args, line):
 
 
 def prepare_run_outputs(args):
-    if not args.save:
+    if not args.save or not getattr(args, "diagnostics", True):
         return
 
     os.makedirs(args.save, exist_ok=True)
@@ -68,6 +68,7 @@ def prepare_run_outputs(args):
             "moe_wanda_routing_power": args.moe_wanda_routing_power,
             "moe_wanda_cluster_experts": bool(args.moe_wanda_cluster_experts),
             "moe_wanda_cluster_k": args.moe_wanda_cluster_k,
+            "diagnostics": bool(args.diagnostics),
             "save": args.save,
             "save_model": args.save_model,
             "torch_version": _safe_version("torch"),
@@ -149,12 +150,22 @@ def build_parser():
     parser.add_argument(
         "--save_model", type=str, default=None, help="Path to save the pruned model."
     )
+    parser.add_argument(
+        "--no_diagnostics",
+        action="store_false",
+        dest="diagnostics",
+        help="Disable detailed pruning diagnostics and only write the final result log.",
+    )
+    parser.set_defaults(diagnostics=True)
 
     parser.add_argument("--eval_zero_shot", action="store_true")
     return parser
 
 
 def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
     import numpy as np
     import torch
 
@@ -166,9 +177,6 @@ def main():
     print("transformers", version("transformers"))
     print("accelerate", version("accelerate"))
     print("# of gpus: ", torch.cuda.device_count())
-
-    parser = build_parser()
-    args = parser.parse_args()
 
     if args.model is not None:
         args.model = args.model.rstrip("/")

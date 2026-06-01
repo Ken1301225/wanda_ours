@@ -1,5 +1,3 @@
-import time 
-import heapq 
 import torch 
 import torch.nn as nn 
 from .sparsegpt import SparseGPT 
