@@ -3,13 +3,13 @@ set -euo pipefail
 
 MODEL_ROOT="${MODEL_ROOT:-/data1/ldk/huggingface/hub}"
 HF_CACHE_ROOT="${HF_CACHE_ROOT:-/data1/ldk/huggingface}"
-RUN_ROOT="${RUN_ROOT:-/data1/ldk/SPNN/deepseekv2/moe_wanda_ablation}"
+RUN_ROOT="${RUN_ROOT:-/data1/ldk/nlp/deepseekv2/moe_wanda_ablation}"
 
 MODEL_REPO="${MODEL_REPO:-deepseek-ai/DeepSeek-V2-Lite}"
 MODEL="${MODEL:-${MODEL_ROOT}/models--deepseek-ai--DeepSeek-V2-Lite/snapshots/604d5664dddd88a0433dbae533b7fe9472482de0}"
-SPARSITY_RATIO="${SPARSITY_RATIO:-0.75}"
+SPARSITY_RATIO="${SPARSITY_RATIO:-0.5}"
 SPARSITY_TYPE="${SPARSITY_TYPE:-unstructured}"
-CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-1}}"
+CUDA_DEVICES="${CUDA_DEVICES:-${CUDA_DEVICE:-0,1}}"
 MAX_PARALLEL="${MAX_PARALLEL:-1}"
 SEED="${SEED:-0}"
 NSAMPLES="${NSAMPLES:-512}"
@@ -18,7 +18,7 @@ DRY_RUN="${DRY_RUN:-false}"
 DIAGNOSTICS="${DIAGNOSTICS:-false}"
 
 ROUTING_POWERS="${ROUTING_POWERS:-0.5 1.0 1.5 2.0}"
-CLUSTER_KS="${CLUSTER_KS:-5 10 15 30}"
+CLUSTER_KS="${CLUSTER_KS:-5 10 15 20 25 30}"
 
 timestamp=$(date +"%Y%m%d_%H%M%S")
 ABLATION_ROOT="${ABLATION_ROOT:-${RUN_ROOT}/ablation_${timestamp}}"
