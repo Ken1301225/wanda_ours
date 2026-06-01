@@ -27,6 +27,7 @@ export HF_HOME="${HF_HOME:-$HF_CACHE_ROOT}"
 export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-${HF_CACHE_ROOT}/datasets}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_CACHE_ROOT}/hub}"
 
+CUDA_DEVICES="${CUDA_DEVICES//,/ }"
 read -r -a GPU_QUEUE <<< "$CUDA_DEVICES"
 if [[ "${#GPU_QUEUE[@]}" -eq 0 ]]; then
   echo "CUDA_DEVICES must contain at least one GPU id." >&2
@@ -35,6 +36,10 @@ fi
 if (( MAX_PARALLEL < 1 )); then
   echo "MAX_PARALLEL must be >= 1." >&2
   exit 1
+fi
+if (( MAX_PARALLEL > ${#GPU_QUEUE[@]} )); then
+  echo "MAX_PARALLEL=$MAX_PARALLEL is larger than GPU count=${#GPU_QUEUE[@]}; using one task per GPU." >&2
+  MAX_PARALLEL="${#GPU_QUEUE[@]}"
 fi
 
 if [[ "$DRY_RUN" != "true" && ! -d "$MODEL" ]]; then
@@ -96,8 +101,69 @@ run_case() {
   fi
 }
 
-running_jobs=0
 case_index=0
+job_failed=0
+FREE_SLOT=""
+declare -a SLOT_PIDS
+for ((i = 0; i < ${#GPU_QUEUE[@]}; i++)); do
+  SLOT_PIDS[$i]=""
+done
+
+active_job_count() {
+  local count=0 pid
+  for pid in "${SLOT_PIDS[@]}"; do
+    if [[ -n "$pid" ]]; then
+      count=$((count + 1))
+    fi
+  done
+  echo "$count"
+}
+
+release_slot_for_pid() {
+  local done_pid="$1"
+  local slot
+  for slot in "${!SLOT_PIDS[@]}"; do
+    if [[ "${SLOT_PIDS[$slot]}" == "$done_pid" ]]; then
+      SLOT_PIDS[$slot]=""
+      return
+    fi
+  done
+}
+
+wait_for_free_slot() {
+  local slot done_pid
+  while true; do
+    if (( $(active_job_count) < MAX_PARALLEL )); then
+      for slot in "${!SLOT_PIDS[@]}"; do
+        if [[ -z "${SLOT_PIDS[$slot]}" ]]; then
+          FREE_SLOT="$slot"
+          return
+        fi
+      done
+    fi
+    done_pid=""
+    if ! wait -n -p done_pid; then
+      job_failed=1
+    fi
+    release_slot_for_pid "$done_pid"
+    if (( job_failed != 0 )); then
+      wait_for_all_jobs
+      echo "At least one ablation job failed." >&2
+      exit 1
+    fi
+  done
+}
+
+wait_for_all_jobs() {
+  local done_pid
+  while (( $(active_job_count) > 0 )); do
+    done_pid=""
+    if ! wait -n -p done_pid; then
+      job_failed=1
+    fi
+    release_slot_for_pid "$done_pid"
+  done
+}
 
 submit_case() {
   local case_name="$1"
@@ -105,20 +171,22 @@ submit_case() {
   local routing_power="$3"
   local cluster_experts="$4"
   local cluster_k="$5"
-  local gpu_id="${GPU_QUEUE[$((case_index % ${#GPU_QUEUE[@]}))]}"
-  case_index=$((case_index + 1))
+  local gpu_id
 
   if [[ "$DRY_RUN" == "true" ]]; then
+    gpu_id="${GPU_QUEUE[$((case_index % ${#GPU_QUEUE[@]}))]}"
     run_case "$case_name" "$routing_mode" "$routing_power" "$cluster_experts" "$cluster_k" "$gpu_id"
+    case_index=$((case_index + 1))
     return
   fi
 
+  local slot
+  wait_for_free_slot
+  slot="$FREE_SLOT"
+  gpu_id="${GPU_QUEUE[$slot]}"
   run_case "$case_name" "$routing_mode" "$routing_power" "$cluster_experts" "$cluster_k" "$gpu_id" &
-  running_jobs=$((running_jobs + 1))
-  if (( running_jobs >= MAX_PARALLEL )); then
-    wait -n
-    running_jobs=$((running_jobs - 1))
-  fi
+  SLOT_PIDS[$slot]="$!"
+  case_index=$((case_index + 1))
 }
 
 # 1. Routing statistics ablation: top-k routed tokens vs all-token dense softmax.
@@ -137,7 +205,11 @@ for cluster_k in $CLUSTER_KS; do
 done
 
 if [[ "$DRY_RUN" != "true" ]]; then
-  wait
+  wait_for_all_jobs
 fi
 
 echo "Ablation root: $ABLATION_ROOT"
+if (( job_failed != 0 )); then
+  echo "At least one ablation job failed." >&2
+  exit 1
+fi
