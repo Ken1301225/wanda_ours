@@ -16,6 +16,8 @@ NSAMPLES="${NSAMPLES:-512}"
 SAVE_MODEL="${SAVE_MODEL:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 DIAGNOSTICS="${DIAGNOSTICS:-false}"
+SKIP_EXISTING="${SKIP_EXISTING:-false}"
+SKIP_EXISTING_MODE="${SKIP_EXISTING_MODE:-result}"
 
 ROUTING_POWERS="${ROUTING_POWERS:-0.5 1.0 1.5 2.0}"
 CLUSTER_KS="${CLUSTER_KS:-5 10 15 30}"
@@ -58,6 +60,20 @@ run_case() {
 
   local output_dir="${ABLATION_ROOT}/${case_name}/output"
   local checkpoint_dir="${ABLATION_ROOT}/${case_name}/ckpt"
+  local result_file="${output_dir}/log_moe_wanda.txt"
+  if [[ "$SKIP_EXISTING" == "true" ]]; then
+    if [[ "$SKIP_EXISTING_MODE" == "result" && -s "$result_file" ]]; then
+      echo "===== $case_name ====="
+      echo "Skip existing result: $result_file"
+      return
+    fi
+    if [[ "$SKIP_EXISTING_MODE" == "case" && -d "${ABLATION_ROOT}/${case_name}" ]]; then
+      echo "===== $case_name ====="
+      echo "Skip existing case directory: ${ABLATION_ROOT}/${case_name}"
+      return
+    fi
+  fi
+
   if [[ "$DRY_RUN" != "true" ]]; then
     mkdir -p "$output_dir"
   fi
