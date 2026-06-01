@@ -334,6 +334,45 @@ def _parse_gate_output(gate_output):
     return tensors[0], None, None
 
 
+def _compute_gate_logits_from_weight(gate_module, hidden_states):
+    weight = getattr(gate_module, "weight", None)
+    if weight is None or not torch.is_tensor(weight):
+        return None
+
+    hidden_shape = hidden_states.shape
+    flat_hidden = _flatten_tokens(hidden_states).detach()
+    bias = getattr(gate_module, "bias", None)
+    if torch.is_tensor(bias):
+        bias = bias.float()
+    logits = torch.nn.functional.linear(flat_hidden.float(), weight.float(), bias)
+    if len(hidden_shape) > 2:
+        logits = logits.reshape(*hidden_shape[:-1], logits.shape[-1])
+    return logits
+
+
+def _is_deepseek_gate(gate_module):
+    return (
+        hasattr(gate_module, "n_routed_experts")
+        and hasattr(gate_module, "topk_method")
+        and hasattr(gate_module, "scoring_func")
+        and hasattr(gate_module, "weight")
+    )
+
+
+def _compute_router_logits_from_module(moe_module, hidden_states):
+    hidden_states = hidden_states.detach()
+    if _is_deepseek_gate(moe_module.gate):
+        return _compute_gate_logits_from_weight(moe_module.gate, hidden_states)
+
+    gate_output = moe_module.gate(hidden_states)
+    router_logits, _, _ = _parse_gate_output(gate_output)
+
+    if router_logits is None:
+        router_logits = _compute_gate_logits_from_weight(moe_module.gate, hidden_states)
+
+    return router_logits
+
+
 def _compute_topk_from_module(moe_module, hidden_states):
     hidden_states = hidden_states.detach()
     gate_output = moe_module.gate(hidden_states)
@@ -368,10 +407,7 @@ def _compute_topk_from_module(moe_module, hidden_states):
 
 
 def _compute_router_logits(moe_module, hidden_states):
-    hidden_states = hidden_states.detach()
-    gate_output = moe_module.gate(hidden_states)
-    router_logits, _, _ = _parse_gate_output(gate_output)
-
+    router_logits = _compute_router_logits_from_module(moe_module, hidden_states)
     if router_logits is None:
         raise RuntimeError("Router logits are required for clustered MoE-Wanda pruning.")
 
@@ -379,13 +415,11 @@ def _compute_router_logits(moe_module, hidden_states):
 
 
 def _compute_dense_routing_probs(moe_module, hidden_states):
-    hidden_states = hidden_states.detach()
-    gate_output = moe_module.gate(hidden_states)
-    router_logits, _, _ = _parse_gate_output(gate_output)
-
+    router_logits = _compute_router_logits_from_module(moe_module, hidden_states)
     if router_logits is None:
         raise RuntimeError(
-            "Dense-softmax MoE-Wanda statistics require router logits from moe_module.gate(...)."
+            "Dense-softmax MoE-Wanda statistics require router logits from moe_module.gate(...) "
+            "or a gate.weight parameter."
         )
 
     return torch.softmax(router_logits.float(), dim=-1)
