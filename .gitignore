@@ -4,6 +4,8 @@
 *.DS_Store
 tests/
 *.png
-
+.vscode/
 output/tex/*
 !output/tex/moe_wanda_article.tex
+thinking.md
+
