@@ -5,4 +5,5 @@
 tests/
 *.png
 
-output/tex/
+output/tex/*
+!output/tex/moe_wanda_article.tex

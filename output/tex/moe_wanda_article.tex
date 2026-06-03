@@ -1,0 +1,774 @@
+% !TEX program = xelatex    
+\documentclass[letterpaper]{article}
+
+\newif\ifaaai
+\IfFileExists{aaai2026.sty}{\aaaitrue}{\aaaifalse}
+\ifaaai
+    \usepackage[submission]{aaai2026}
+\else
+    \usepackage[letterpaper,margin=0.75in]{geometry}
+\fi
+
+\usepackage[UTF8]{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{float}
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{placeins}
+\usepackage{algpseudocode}
+\usepackage{array}
+
+\ifaaai\else
+    \usepackage{hyperref}
+    \hypersetup{
+        colorlinks=true,
+        linkcolor=blue,
+        citecolor=blue,
+        urlcolor=blue
+    }
+\fi
+
+\title{面向 MoE-SwiGLU 模型的路由感知 Wanda 剪枝}
+\author{Anonymous Submission}
+\ifaaai
+\affiliations{
+    Paper under double-blind review
+}
+\fi
+
+\begin{document}
+\maketitle
+\ifaaai\else\twocolumn\fi
+
+\begin{abstract}
+Wanda 通过权重幅值与输入激活尺度的乘积构造剪枝分数，是一种简单有效的后训练剪枝方法。
+然而，在混合专家模型（Mixture-of-Experts, MoE）中，普通 Wanda 分数并不能充分描述 expert 被路由器暴露的程度，也没有显式刻画 SwiGLU expert 内部 gate/up/down 三个投影之间的局部误差传播关系。
+我们从 MoE 层输出扰动出发，推导出一组适用于 MoE-SwiGLU expert 的路由感知 Wanda 分数。
+该方法将 expert 的路由概率、路由强度、SwiGLU 非线性局部斜率以及 down projection 的输出放大效应同时纳入剪枝准则。
+在实现上，我们进一步引入 dense-softmax 路由统计、routing-power 调制，以及基于 router trace 的 expert 聚类剪枝，以缓解高稀疏率下普通 Wanda 的性能坍缩。
+本文重点整理方法动机、数学形式与直观解释；实验结果将在后续版本中补充。
+\end{abstract}
+
+\section{Introduction}
+
+大语言模型剪枝的核心问题是：在不重新训练或只进行极少校准的条件下，如何判断某个权重被置零后对模型输出的影响。
+Wanda 是这一方向中具有代表性的后训练剪枝方法，其基本思想非常直接。
+对于线性层
+\begin{equation}
+    y = Wx,
+\end{equation}
+若剪去权重 $w_{ij}$，则输出第 $i$ 个坐标的局部扰动为
+\begin{equation}
+    \Delta y_i = -w_{ij}x_j.
+\end{equation}
+因此，单个权重的均方扰动可由
+\begin{equation}
+    \mathbb{E}[(\Delta y_i)^2]
+    =
+    w_{ij}^2 \mathbb{E}[x_j^2]
+\end{equation}
+近似，进而得到 Wanda 分数
+\begin{equation}
+    M_{ij}^{\mathrm{Wanda}}
+    =
+    |w_{ij}|\sqrt{\mathbb{E}[x_j^2]}.
+\end{equation}
+
+这一形式在线性层上合理，但直接迁移到 MoE 模型时会遗漏两个关键结构。
+第一，MoE expert 不是对所有 token 均等生效，而是由路由器决定其暴露频率和暴露强度。
+第二，现代 MoE expert 通常采用 SwiGLU 结构，内部包含 gate projection、up projection 和 down projection；剪去 up/gate 中的权重后，误差会经过激活函数和 down projection 继续传播，而不只是影响一个普通线性输出坐标。
+
+我们的核心观点是：MoE 剪枝不应只回答“某个线性层输入通道是否活跃”，还应回答“这个 expert 是否被路由器实际使用、使用时权重有多大、以及这个权重的扰动会如何经过 SwiGLU expert 传播到 MoE 层输出”。
+基于这一点，我们构造了面向 MoE-SwiGLU 的路由感知 Wanda 分数。
+本文的贡献可以概括为三点。
+\begin{enumerate}[leftmargin=*]
+    \item 我们从 MoE 层输出扰动出发，推导出 gate/up/down 三类 projection 的结构化 Wanda 分数。
+    \item 我们引入 dense-softmax 路由统计与 routing-power 调制，使校准阶段能够更稳定地估计 expert 的路由暴露。
+    \item 我们提出基于 router trace 的 expert 聚类剪枝，在功能相近的 expert 内共享剪枝预算，以缓解高稀疏率下的性能坍缩。
+\end{enumerate}
+
+\section{Preliminaries and Motivation}
+
+\subsection{MoE-SwiGLU Layer}
+
+考虑一个带有 top-$k$ 或 softmax 路由的 MoE 层。
+给定 token 隐状态 $x \in \mathbb{R}^{d}$，MoE 层输出写作
+\begin{equation}
+    y_{\mathrm{moe}}(x)
+    =
+    \sum_{e} g_e(x) f_e(x),
+\end{equation}
+其中 $g_e(x)$ 表示 expert $e$ 的路由权重。
+在 top-$k$ 路由下，未被选择的 expert 可视为 $g_e(x)=0$；在 dense-softmax 统计下，所有 expert 都具有 softmax 概率，只是大小不同。
+
+对一个 SwiGLU expert，有
+\begin{align}
+    f_e(x) &= W_{\mathrm{down},e} h_e(x), \\
+    h_e(x) &= \phi(a_e(x)) \odot b_e(x), \\
+    a_e(x) &= W_{\mathrm{gate},e}x, \\
+    b_e(x) &= W_{\mathrm{up},e}x,
+\end{align}
+其中 $\phi$ 通常为 SiLU 激活函数，$\odot$ 表示逐元素乘法。
+
+在校准样本附近，我们采用如下局部近似：
+\begin{enumerate}[label=(\roman*)]
+    \item 路由器输出在当前校准前向中固定；
+    \item 当前层局部输出扰动用于近似剪枝损伤；
+    \item 对 SwiGLU 非线性项使用一阶展开；
+    \item 对多个权重同时置零产生的高阶交叉项不显式建模。
+\end{enumerate}
+
+\subsection{Routing Exposure}
+
+若只改变 expert $e$ 内部参数，且冻结当前 token 上的路由权重，则
+\begin{equation}
+    \Delta y_{\mathrm{moe}}(x)
+    =
+    g_e(x) \Delta f_e(x),
+\end{equation}
+因此
+\begin{equation}
+    \|\Delta y_{\mathrm{moe}}(x)\|_2^2
+    =
+    g_e(x)^2 \|\Delta f_e(x)\|_2^2.
+    \label{eq:routing_exposure}
+\end{equation}
+式 \eqref{eq:routing_exposure} 是我们相对普通 Wanda 的第一个关键变化：expert 内部权重的重要性必须乘上路由暴露因子。
+如果一个 expert 很少被使用，或被使用时路由权重很小，那么相同的 expert 内部扰动对 MoE 层输出的影响较小。
+反之，高负载、高置信路由的 expert 更应被保护。
+
+\section{Method}
+
+本节给出 MoE-Wanda 的具体剪枝准则。
+我们首先将局部输出扰动分别展开到 down、up 和 gate 三类 projection 上，随后介绍 dense-softmax 统计、routing-power 调制和 expert clustering。
+
+\subsection{Projection-wise MoE-Wanda Scores}
+
+\paragraph{Down Projection.}
+
+对 down projection 权重 $(W_{\mathrm{down},e})_{ij}$，剪去该权重会造成
+\begin{equation}
+    \Delta f_e(x)_i
+    =
+    -(W_{\mathrm{down},e})_{ij} h_e(x)_j.
+\end{equation}
+代入式 \eqref{eq:routing_exposure}，得到
+\begin{equation}
+    \|\Delta y_{\mathrm{moe}}(x)\|_2^2
+    =
+    g_e(x)^2
+    (W_{\mathrm{down},e})_{ij}^{2}
+    h_e(x)_j^2.
+\end{equation}
+因此 down projection 的路由感知 Wanda 分数为
+\begin{equation}
+    M^{\mathrm{down}}_{e,ij}
+    =
+    |(W_{\mathrm{down},e})_{ij}|
+    \sqrt{
+    \mathbb{E}
+    \left[
+        g_e(x)^p h_e(x)_j^2
+    \right]
+    }.
+    \label{eq:down_score}
+\end{equation}
+理论上由平方误差自然得到 $p=2$。
+实现中我们允许更一般的 routing power $p>0$，用于调节路由强度在分数中的影响。
+当 $p$ 较大时，高路由权重 token 被更强地强调；当 $p$ 较小时，分数更接近按 expert 使用范围做平滑统计。
+
+\paragraph{Up Projection.}
+
+对 up projection 权重 $(W_{\mathrm{up},e})_{kj}$，有
+\begin{equation}
+    \Delta b_e(x)_k
+    =
+    -(W_{\mathrm{up},e})_{kj}x_j.
+\end{equation}
+在固定 $a_e(x)_k$ 与 $W_{\mathrm{down},e}$ 的局部条件下，
+\begin{equation}
+    \Delta h_e(x)_k
+    =
+    \phi(a_e(x)_k)\Delta b_e(x)_k.
+\end{equation}
+该扰动再经 down projection 第 $k$ 个中间通道传播到 expert 输出，因此
+\begin{equation}
+    \|\Delta f_e(x)\|_2^2
+    =
+    (W_{\mathrm{up},e})_{kj}^{2}
+    x_j^2
+    \phi(a_e(x)_k)^2
+    \|W_{\mathrm{down},e}[:,k]\|_2^2.
+\end{equation}
+得到 up projection 分数
+\begin{equation}
+    M^{\mathrm{up}}_{e,kj}
+    =
+    |(W_{\mathrm{up},e})_{kj}|
+    \|W_{\mathrm{down},e}[:,k]\|_2
+    \sqrt{
+    \mathbb{E}
+    \left[
+        g_e(x)^p
+        \phi(a_e(x)_k)^2
+        x_j^2
+    \right]
+    }.
+    \label{eq:up_score}
+\end{equation}
+相较普通 Wanda，式 \eqref{eq:up_score} 多了两个结构项。
+其一是路由暴露 $g_e(x)^p$。
+其二是 $\|W_{\mathrm{down},e}[:,k]\|_2$，它表示中间通道 $k$ 对最终 expert 输出的放大能力。
+如果某个 up 权重连接到一个会被 down projection 强烈放大的中间通道，即使该输入通道本身的激活尺度不大，也不应轻易剪去。
+
+\paragraph{Gate Projection.}
+
+对 gate projection 权重 $(W_{\mathrm{gate},e})_{kj}$，有
+\begin{equation}
+    \Delta a_e(x)_k
+    =
+    -(W_{\mathrm{gate},e})_{kj}x_j.
+\end{equation}
+由于 gate 分支进入非线性函数，需要做一阶展开：
+\begin{equation}
+    \Delta \phi(a_e(x)_k)
+    \approx
+    \phi'(a_e(x)_k)\Delta a_e(x)_k.
+\end{equation}
+又因为 $h_e(x)_k=\phi(a_e(x)_k)b_e(x)_k$，所以
+\begin{equation}
+    \Delta h_e(x)_k
+    \approx
+    b_e(x)_k
+    \phi'(a_e(x)_k)
+    \Delta a_e(x)_k.
+\end{equation}
+得到 gate projection 分数
+\begin{equation}
+    M^{\mathrm{gate}}_{e,kj}
+    =
+    |(W_{\mathrm{gate},e})_{kj}|
+    \|W_{\mathrm{down},e}[:,k]\|_2
+    \sqrt{
+    \mathbb{E}
+    \left[
+        g_e(x)^p
+        b_e(x)_k^2
+        \phi'(a_e(x)_k)^2
+        x_j^2
+    \right]
+    }.
+    \label{eq:gate_score}
+\end{equation}
+gate projection 是三类投影中最容易被普通 Wanda 误判的一类。
+普通 Wanda 只观察 $x_j^2$，而式 \eqref{eq:gate_score} 还考虑了非线性斜率 $\phi'(a)$、up 分支输出 $b$、down projection 放大因子以及路由暴露。
+这正是 MoE-SwiGLU 结构相对于普通 MLP 线性层的额外敏感性来源。
+
+\subsection{Routing-Aware Moment Estimation}
+
+普通 Wanda 的核心分数是 $|w|\sqrt{\mathbb{E}[x^2]}$。
+该分数默认一个线性层对所有输入样本均等生效。
+MoE 层不满足这一假设，因为 expert 的实际贡献由路由器决定。
+
+我们的分数将普通 Wanda 中的输入激活二阶矩替换为路由加权的局部扰动矩。
+对应到实现，针对每个 expert，我们收集三类统计量：
+\begin{align}
+    S^{\mathrm{down}}_{e,k}
+    &=
+    \sum_x g_e(x)^p h_e(x)_k^2, \\
+    S^{\mathrm{up}}_{e,kj}
+    &=
+    \sum_x g_e(x)^p \phi(a_e(x)_k)^2 x_j^2, \\
+    S^{\mathrm{gate}}_{e,kj}
+    &=
+    \sum_x g_e(x)^p b_e(x)_k^2 \phi'(a_e(x)_k)^2 x_j^2.
+\end{align}
+随后将这些统计量分别与当前权重幅值及 down projection channel norm 组合，得到式 \eqref{eq:down_score}--\eqref{eq:gate_score}。
+
+这个创新的逻辑是：剪枝准则应直接近似“置零该权重后 MoE 层输出会变化多少”，而不是间接使用普通线性层的输入激活尺度。
+当模型进入高稀疏率区域时，错误保留与错误删除的代价都会变大，因此更贴近输出扰动的分数更稳定。
+
+\subsection{Dense-Softmax Routing Statistics}
+
+top-$k$ MoE 前向只激活少量 expert。
+如果只对实际 top-$k$ expert 收集统计量，未被选中的 expert 在当前 token 上贡献为零。
+这与真实推理路径一致，但会带来一个问题：校准样本有限时，某些 expert 的统计量非常稀疏，容易被误判为不重要。
+尤其在高稀疏率下，这种采样方差会被放大。
+
+因此，当前实现支持 dense-softmax 统计。
+具体做法是对 router logits 做 softmax，得到所有 expert 的概率 $g_e(x)$，并对每个 expert 累积路由加权的局部矩。
+这并不意味着推理时执行所有 expert，而是用 dense router distribution 作为校准阶段的重要性估计。
+它保留了 router 对所有 expert 的相对偏好信息，比硬 top-$k$ 采样拥有更低方差。
+
+直观上，top-$k$ 统计只记录“这次有没有被选中”，dense-softmax 统计则记录“router 有多倾向于使用这个 expert”。
+后者对临界 expert 更友好。
+当某些 expert 经常排在 top-$k$ 附近但未被选中时，它们仍可能在相邻输入分布或剪枝后路由漂移中变得重要；dense-softmax 统计能提前捕捉这种潜在暴露。
+
+\subsection{Router-Trace Expert Clustering}
+
+普通逐 expert 或逐矩阵剪枝会给每个矩阵施加相同的局部稀疏率。
+这种做法简单，但忽略了 expert 之间的功能分化。
+一些 expert 可能服务相似 token 区域，另一些 expert 负责不同语义或不同输入模式。
+如果对所有 expert 完全独立排序，容易造成全局资源分配不均；如果对所有 expert 完全全局排序，又可能让某些 expert 被过度剪空。
+
+当前实现引入了基于 router trace 的 expert 聚类。
+对每个 MoE 层，我们收集校准样本上的 router logits trace。
+将每个 expert 看成一个跨 token 的 router 响应向量，归一化后进行固定 $k$ 的 k-means 聚类。
+在聚类之后，对同一层、同一 projection、同一 expert cluster 内的权重分数做 global mask。
+
+这一设计的动机是：功能相近的 expert 应共享剪枝预算，而功能差异大的 expert 不应被放进同一个全局竞争池。
+cluster 内全局排序允许重要 expert 或重要通道获得更多保留权重，同时又避免全层全局排序导致某一类 expert 被系统性牺牲。
+它在局部独立剪枝和完全全局剪枝之间提供了一个结构化折中。
+
+\subsection{Complete Algorithm}
+
+算法 \ref{alg:moe_wanda} 给出了本文最终采用的 MoE-Wanda 剪枝流程。
+该流程保持 Wanda 的 one-shot layer-wise 特点：先用校准集捕获当前层输入，再逐层收集路由加权统计、生成剪枝 mask、置零权重，并用剪枝后的当前层输出作为下一层校准输入。
+与普通 Wanda 的关键区别在于，剪枝分数不再只依赖线性层输入二阶矩，而是显式使用 router 暴露、SwiGLU 局部传播项和 down projection 通道范数。
+
+\begin{figure*}[t]
+\small
+\caption{MoE-Wanda：路由感知的 MoE-SwiGLU 剪枝}
+\label{alg:moe_wanda}
+\begin{algorithmic}[1]
+\Require 预训练 MoE 模型 $F$，校准样本 $\mathcal{D}$，目标稀疏率 $s$，路由指数 $p>0$，expert 聚类数 $K$
+\Ensure 剪枝后的模型 $\widetilde{F}$
+\State 用 $\mathcal{D}$ 前向到第 $1$ 层，缓存每个校准样本的层输入 $\{x^{(0)}_t\}$
+\For{Transformer 层 $\ell=1,\ldots,L$}
+    \State 初始化当前层所有 expert 的统计量 $S^{\mathrm{down}},S^{\mathrm{up}},S^{\mathrm{gate}}$
+    \For{校准 token $x_t^{(\ell-1)}$}
+        \State 计算当前 MoE router logits $z_t$，并对所有 expert 取 $g_{t,e}=\mathrm{softmax}(z_t)_e$
+        \State 记录每个 expert 的 router-logit trace，用于后续聚类
+        \For{每个 expert $e$}
+            \State $a_{t,e}=W_{\mathrm{gate},e}x_t^{(\ell-1)}$，$b_{t,e}=W_{\mathrm{up},e}x_t^{(\ell-1)}$
+            \State $h_{t,e}=\phi(a_{t,e})\odot b_{t,e}$，$\alpha_{t,e}=g_{t,e}^{p}$
+            \State 累积 $S^{\mathrm{down}}_{e,k}\mathrel{+}= \alpha_{t,e} h_{t,e,k}^{2}$
+            \State 累积 $S^{\mathrm{up}}_{e,kj}\mathrel{+}= \alpha_{t,e}\phi(a_{t,e,k})^{2}(x_{t,j}^{(\ell-1)})^{2}$
+            \State 累积 $S^{\mathrm{gate}}_{e,kj}\mathrel{+}= \alpha_{t,e}b_{t,e,k}^{2}\phi'(a_{t,e,k})^{2}(x_{t,j}^{(\ell-1)})^{2}$
+        \EndFor
+    \EndFor
+    \For{当前层每个 expert $e$}
+        \State $d_{e,k}=\|W_{\mathrm{down},e}[:,k]\|_2$
+        \State $M^{\mathrm{down}}_{e,ij}=|W_{\mathrm{down},e,ij}|\sqrt{S^{\mathrm{down}}_{e,j}/|\mathcal{D}|}$
+        \State $M^{\mathrm{up}}_{e,kj}=|W_{\mathrm{up},e,kj}|\,d_{e,k}\sqrt{S^{\mathrm{up}}_{e,kj}/|\mathcal{D}|}$
+        \State $M^{\mathrm{gate}}_{e,kj}=|W_{\mathrm{gate},e,kj}|\,d_{e,k}\sqrt{S^{\mathrm{gate}}_{e,kj}/|\mathcal{D}|}$
+    \EndFor
+    \State 将每个 expert 的 router-logit trace 归一化，按相似路由响应聚成 $K$ 个 cluster
+    \State 在同一层、同一 projection、同一 cluster 内按 $M$ 全局排序，剪去最低的 $s$ 比例权重
+    \State 将被 mask 选中的 gate/up/down 权重置零
+    \State 用剪枝后的第 $\ell$ 层重新计算校准输出 $\{x_t^{(\ell)}\}$，作为下一层输入
+\EndFor
+\State \Return $\widetilde{F}$
+\end{algorithmic}
+\end{figure*}
+
+伪代码中的 $S^{\mathrm{down}}$、$S^{\mathrm{up}}$ 与 $S^{\mathrm{gate}}$ 分别对应实现中的 down、up、gate 三类 moment。
+dense-softmax 模式降低了校准样本有限时的路由统计方差；routing power $p$ 控制高置信路由 token 对分数的影响；expert clustering 则把剪枝预算限制在路由行为相近的 expert 池内，避免完全逐 expert 或完全全局剪枝带来的资源分配偏差。
+
+\section{Analysis}
+
+\subsection{Why Vanilla Wanda Collapses at High Sparsity}
+
+我们观察到，普通 Wanda 方法在约 $70\%$ 高稀疏率下会发生严重性能坍缩。
+这一现象可以从数学和直观两个角度理解。
+
+\paragraph{Mathematical Mismatch.}
+
+普通 Wanda 对任意线性层权重使用
+\begin{equation}
+    M_{ij}^{\mathrm{Wanda}}
+    =
+    |w_{ij}|\sqrt{\mathbb{E}[x_j^2]}.
+\end{equation}
+这等价于假设权重扰动的主要影响是
+\begin{equation}
+    w_{ij}^2 \mathbb{E}[x_j^2].
+\end{equation}
+但在 MoE-SwiGLU expert 中，真实的局部扰动包含更多乘法因子。
+例如，对于 up projection，扰动尺度应近似为
+\begin{equation}
+    (W_{\mathrm{up},e})_{kj}^{2}
+    \|W_{\mathrm{down},e}[:,k]\|_2^2
+    \mathbb{E}
+    [
+        g_e(x)^p
+        \phi(a_e(x)_k)^2
+        x_j^2
+    ].
+\end{equation}
+对于 gate projection，还应包含
+\begin{equation}
+    b_e(x)_k^2 \phi'(a_e(x)_k)^2.
+\end{equation}
+
+因此，普通 Wanda 实际上把
+\begin{equation}
+    g_e(x)^p,\quad
+    \phi(a_e(x)_k)^2,\quad
+    b_e(x)_k^2,\quad
+    \phi'(a_e(x)_k)^2,\quad
+    \|W_{\mathrm{down},e}[:,k]\|_2^2
+\end{equation}
+都隐式当作常数或噪声处理。
+在低稀疏率下，这种近似误差可能还能被模型冗余吸收。
+但当稀疏率升高到 $70\%$ 左右时，大量权重同时被删除，分数排序中的系统性偏差会直接决定哪些通道被整体保留或整体摧毁。
+一旦普通 Wanda 低估了高路由暴露 expert 的关键 gate/up 权重，MoE 层输出误差就会迅速放大。
+
+此外，MoE 层输出是多个 expert 的加权和。
+对于高负载 expert，误差会在大量 token 上重复出现。
+若记某个 expert 的有效暴露质量为
+\begin{equation}
+    R_e = \mathbb{E}[g_e(x)^p],
+\end{equation}
+则两个具有相同普通 Wanda 分数的权重，在真实 MoE 输出中的损伤可能相差一个 $R_e$ 量级。
+普通 Wanda 无法区分这种差异，因此会把低暴露 expert 中看似激活较大的权重与高暴露 expert 中真正关键的权重放到同一排序尺度中。
+
+\paragraph{Expert Specialization.}
+
+MoE 模型的能力来自 expert 分工。
+不同 expert 并非简单复制，而是在路由器控制下服务不同 token 区域。
+普通 Wanda 以每个线性矩阵的输入激活尺度为主，缺少对 expert 分工和路由负载的显式保护。
+当稀疏率较低时，每个 expert 仍保留足够容量，即使部分权重排序不准，模型还能依靠冗余补偿。
+当稀疏率达到 $70\%$ 时，这种冗余被大量消耗，错误剪掉的权重会集中表现为以下几种坍缩模式：
+
+\begin{enumerate}[label=(\arabic*)]
+    \item \textbf{高负载 expert 被过度破坏。}
+    路由器频繁选择的 expert 对最终 loss 影响更大。
+    普通 Wanda 不显式保护这类 expert，导致常用路径上的误差被反复放大。
+
+    \item \textbf{SwiGLU 中间通道被错误清空。}
+    up/gate 的某些中间通道虽然输入激活不一定最大，但经过 down projection 后可能强烈影响输出。
+    普通 Wanda 不看 down channel norm，因此容易剪掉这些结构性关键通道。
+
+    \item \textbf{gate 分支非线性敏感区被误判。}
+    gate projection 的重要性与 $\phi'(a)$ 有关。
+    当 token 落在 SiLU 较敏感的区域时，小的 gate 权重扰动也会显著改变 expert 内部调制。
+    普通 Wanda 不看非线性斜率，无法识别这类敏感权重。
+
+    \item \textbf{校准统计方差被高稀疏率放大。}
+    top-$k$ 路由下，每个 expert 只看到校准集的一部分 token。
+    在样本有限时，普通统计容易偏置。
+    高稀疏率下，排序误差不再只是剪掉少量边缘权重，而会改变整个 expert 的有效容量。
+\end{enumerate}
+
+因此，普通 Wanda 的高稀疏坍缩并不是单一实现问题，而是其打分假设与 MoE-SwiGLU 结构之间存在系统性失配。
+我们的路由感知局部扰动分数正是针对这些失配设计的。
+
+\subsection{Comparison with Vanilla Wanda}
+
+表 \ref{tab:score_comparison} 总结了普通 Wanda 与本文方法的差异。
+
+\begin{table*}[!t]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{p{0.17\textwidth} p{0.29\textwidth} p{0.46\textwidth}}
+\toprule
+对象 & 普通 Wanda & MoE-Wanda \\
+\midrule
+线性输入尺度 & $\mathbb{E}[x_j^2]$ & 路由加权局部二阶矩 \\
+Expert 路由 & 不建模 & 显式使用 $g_e(x)^p$ \\
+SwiGLU gate & 不建模局部斜率 & 使用 $b^2\phi'(a)^2$ 描述 gate 分支敏感性 \\
+Up/down 耦合 & 不建模跨投影传播 & 使用 $\|W_{\mathrm{down}}[:,k]\|_2$ 描述中间通道的输出放大效应 \\
+Expert 关系 & 独立排序或普通全局排序 & 基于 router trace 聚类，在功能相近 expert 内共享剪枝预算 \\
+\bottomrule
+\end{tabular}
+\caption{普通 Wanda 与 MoE-Wanda 的核心区别。}
+\label{tab:score_comparison}
+\end{table*}
+\FloatBarrier
+
+从方法逻辑上看，我们并不是简单给 Wanda 增加经验权重，而是从 MoE 层输出扰动出发，将普通 Wanda 的线性层分数推广到 MoE-SwiGLU 结构。
+down projection 使用路由加权 hidden activation；
+up projection 额外考虑 gate 激活和 down projection 放大；
+gate projection 额外考虑 up 分支输出、激活函数局部斜率和 down projection 放大。
+在此基础上，dense-softmax 路由统计降低校准方差，routing power 控制路由强度对分数的影响，expert 聚类剪枝则在功能相近 expert 内分配稀疏预算。
+
+\section{Experiments}
+
+\subsection{Experimental Setup}
+
+我们在 Qwen1.5-MoE-A2.7B 和 DeepSeek-V2-Lite 上评估 MoE-Wanda。
+对于 Qwen1.5-MoE-A2.7B，校准参数设为 sequence length $2048$ 和 calibration samples $128$，并报告多个 zero-shot accuracy 任务的平均表现。
+对于 PPL 消融实验，我们使用 C4 作为校准数据，使用 WikiText2 perplexity 作为评估指标。
+除非特别说明，表中 PPL 越低越好，accuracy 越高越好。
+
+\subsection{Main Results on Qwen1.5-MoE}
+
+表 \ref{tab:qwen_moe_pruning_results_unified} 给出了 Qwen1.5-MoE-A2.7B 在不同稀疏率下的综合 zero-shot accuracy 结果。
+在 $30\%$--$60\%$ 稀疏率下，MoE-Wanda 相比普通 Wanda 保持稳定小幅优势。
+在 $70\%$ 高稀疏率下，普通 Wanda 出现明显性能坍缩，平均 accuracy 从 $59.02$ 降至 $43.00$；MoE-Wanda 仍保持 $54.44$ 的平均 accuracy，说明路由感知分数在高稀疏区域更稳定。
+
+\begin{table*}[!t]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.08}
+\caption{Qwen1.5-MoE-A2.7B 在不同稀疏率下的 zero-shot accuracy（\%）结果。校准参数为 seqlen=2048、nsamples=128。每个稀疏率下 Wanda 与 MoE-Wanda 的较优结果用 \textbf{bold} 标出。}
+\label{tab:qwen_moe_pruning_results_unified}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{llcccccccc}
+\toprule
+\textbf{Sparsity} & \textbf{Method} & \textbf{ARC-c} & \textbf{ARC-e} & \textbf{MMLU} & \textbf{PIQA} & \textbf{HellaS.} & \textbf{OBQA} & \textbf{Wino.} & \textbf{Avg.} \\
+\midrule
+Dense & Unpruned & 42.06 & 73.06 & 61.05 & 79.54 & 57.87 & 30.80 & 68.75 & 59.02 \\
+\midrule
+\multirow{2}{*}{30\%}
+& Wanda & 41.55 & \textbf{73.40} & \textbf{61.07} & 79.60 & 57.49 & \textbf{31.20} & 69.30 & 59.09 \\
+& MoE-Wanda & \textbf{41.72} & 73.19 & 60.72 & \textbf{80.09} & \textbf{57.62} & 31.00 & \textbf{69.53} & \textbf{59.12} \\
+\midrule
+\multirow{2}{*}{40\%}
+& Wanda & 40.78 & 72.85 & \textbf{60.67} & 79.60 & 56.73 & 29.80 & \textbf{70.24} & 58.67 \\
+& MoE-Wanda & \textbf{41.21} & \textbf{73.15} & 60.53 & \textbf{80.25} & \textbf{57.11} & \textbf{30.80} & 69.69 & \textbf{58.96} \\
+\midrule
+\multirow{2}{*}{50\%}
+& Wanda & \textbf{40.78} & 74.03 & \textbf{59.16} & 78.94 & 55.42 & 30.60 & 68.03 & 58.14 \\
+& MoE-Wanda & 40.70 & \textbf{74.37} & 59.02 & \textbf{79.22} & \textbf{55.89} & \textbf{31.60} & \textbf{69.06} & \textbf{58.55} \\
+\midrule
+\multirow{2}{*}{60\%}
+& Wanda & 39.68 & 72.73 & 56.05 & 78.18 & 53.12 & 30.40 & \textbf{68.19} & 56.91 \\
+& MoE-Wanda & \textbf{40.02} & \textbf{72.98} & \textbf{56.70} & \textbf{78.24} & \textbf{53.70} & \textbf{30.60} & 67.64 & \textbf{57.13} \\
+\midrule
+\multirow{2}{*}{70\%}
+& Wanda & 28.92 & 57.53 & 24.43 & 68.66 & 40.88 & 21.00 & 59.59 & 43.00 \\
+& MoE-Wanda & \textbf{38.48} & \textbf{70.37} & \textbf{51.56} & \textbf{76.06} & \textbf{48.98} & \textbf{27.60} & \textbf{68.03} & \textbf{54.44} \\
+\midrule
+\multirow{2}{*}{2:4}
+& Wanda & 39.08 & \textbf{72.81} & 55.68 & \textbf{78.02} & \textbf{52.66} & \textbf{29.80} & 67.56 & 56.52 \\
+& MoE-Wanda & \textbf{40.36} & \textbf{72.81} & \textbf{56.33} & \textbf{78.02} & 52.65 & 29.40 & \textbf{68.03} & \textbf{56.80} \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
+
+\subsection{Qwen PPL Ablations}
+
+表 \ref{tab:qwen_ablation_routing_support} 比较了 routing support 的影响。
+在 $50\%$ 非结构化稀疏率下，dense-softmax routing support 比 top-$k$ support 取得更低 WikiText2 PPL。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{lc}
+\toprule
+Routing mode & WikiText2 PPL \\
+\midrule
+Top-$k$ & 7.7520 \\
+Dense softmax & \textbf{7.7399} \\
+\bottomrule
+\end{tabular}
+\caption{Qwen1.5-MoE-A2.7B 上 routing support 的消融结果。稀疏率为 $50\%$ 非结构化稀疏。}
+\label{tab:qwen_ablation_routing_support}
+\end{table}
+
+表 \ref{tab:qwen_ablation_routing_power} 展示了 dense-softmax MoE-Wanda 中 routing power $p$ 的影响。
+在该设置下，$p=1.5$ 取得最低 WikiText2 PPL。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{lcc}
+\toprule
+Routing mode & Routing power $p$ & WikiText2 PPL \\
+\midrule
+Dense softmax & 0.5 & 7.7565 \\
+Dense softmax & 1.0 & 7.7540 \\
+Dense softmax & 1.5 & \textbf{7.7399} \\
+Dense softmax & 2.0 & 7.7503 \\
+\bottomrule
+\end{tabular}
+\caption{Qwen1.5-MoE-A2.7B 上 routing power 的消融结果。稀疏率为 $50\%$ 非结构化稀疏。}
+\label{tab:qwen_ablation_routing_power}
+\end{table}
+
+表 \ref{tab:qwen_ablation_expert_clustering} 展示了 expert clustering 的 cluster 数量消融。
+在 dense-softmax 和 $p=1.5$ 的设置下，$K=15$ 取得最低 WikiText2 PPL。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{lccc}
+\toprule
+Routing mode & $p$ & Cluster $K$ & WikiText2 PPL \\
+\midrule
+Dense softmax & 1.5 & 5  & 7.7752 \\
+Dense softmax & 1.5 & 10 & 7.7669 \\
+Dense softmax & 1.5 & 15 & \textbf{7.7632} \\
+Dense softmax & 1.5 & 30 & 7.7677 \\
+\bottomrule
+\end{tabular}
+\caption{Qwen1.5-MoE-A2.7B 上 expert clustering 数量的消融结果。稀疏率为 $50\%$ 非结构化稀疏。}
+\label{tab:qwen_ablation_expert_clustering}
+\end{table}
+\FloatBarrier
+
+\subsection{Main Results on DeepSeek-V2-Lite}
+
+表 \ref{tab:deepseek_moe_zero_shot_results} 整理了 DeepSeek-V2-Lite 在多个稀疏率下的 zero-shot accuracy 结果。
+这些结果来自保存后的剪枝模型重新加载评估。
+表中包含 ARC-c、ARC-e、MMLU、BoolQ、PIQA、HellaSwag、OBQA、RTE 和 WinoGrande，Avg. 为九个任务的平均值。
+整体上，MoE-Wanda 在 $30\%$--$70\%$ 非结构化稀疏率下取得更高平均 accuracy，尤其在 $70\%$ 高稀疏率下相对普通 Wanda 更稳定。
+
+\begin{table*}[!t]
+\centering
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.08}
+\caption{DeepSeek-V2-Lite 在不同稀疏设置下的 zero-shot accuracy（\%）结果。Avg. 为九个任务的平均值。每个稀疏设置下 Wanda 与 MoE-Wanda 的较优结果用 \textbf{bold} 标出。}
+\label{tab:deepseek_moe_zero_shot_results}
+\resizebox{\textwidth}{!}{
+\begin{tabular}{llcccccccccc}
+\toprule
+\textbf{Sparsity} & \textbf{Method} & \textbf{ARC-c} & \textbf{ARC-e} & \textbf{MMLU} & \textbf{BoolQ} & \textbf{PIQA} & \textbf{HellaS.} & \textbf{OBQA} & \textbf{RTE} & \textbf{Wino.} & \textbf{Avg.} \\
+\midrule
+Dense & Unpruned & 43.60 & 77.57 & 55.56 & 80.64 & 80.30 & 58.55 & 31.80 & 59.21 & 70.40 & 61.96 \\
+\midrule
+\multirow{2}{*}{30\%}
+& Wanda & 43.43 & 76.43 & 54.75 & 79.33 & \textbf{79.43} & 58.09 & \textbf{31.60} & 62.09 & \textbf{70.96} & 61.79 \\
+& MoE-Wanda & \textbf{43.69} & \textbf{77.06} & \textbf{54.93} & \textbf{79.45} & 79.38 & \textbf{58.21} & 31.20 & \textbf{64.26} & 70.24 & \textbf{62.05} \\
+\midrule
+\multirow{2}{*}{40\%}
+& Wanda & 43.09 & 76.14 & 53.62 & \textbf{79.48} & 78.84 & 57.48 & \textbf{31.60} & 63.18 & \textbf{70.64} & 61.56 \\
+& MoE-Wanda & \textbf{43.69} & \textbf{76.98} & \textbf{53.95} & 79.11 & \textbf{78.94} & \textbf{57.91} & 31.00 & \textbf{63.90} & 70.24 & \textbf{61.75} \\
+\midrule
+\multirow{2}{*}{50\%}
+& Wanda & 41.55 & 75.17 & 50.78 & \textbf{79.14} & 77.91 & 55.41 & \textbf{31.80} & \textbf{65.34} & 70.80 & 60.88 \\
+& MoE-Wanda & \textbf{43.09} & \textbf{75.46} & \textbf{51.04} & 77.40 & \textbf{78.84} & \textbf{56.65} & 31.20 & \textbf{65.34} & \textbf{71.11} & \textbf{61.13} \\
+\midrule
+\multirow{2}{*}{60\%}
+& Wanda & 39.85 & 72.35 & 46.67 & 77.52 & 75.84 & 51.56 & 29.00 & 62.82 & \textbf{70.72} & 58.48 \\
+& MoE-Wanda & \textbf{41.72} & \textbf{73.65} & \textbf{46.76} & \textbf{77.83} & \textbf{77.69} & \textbf{53.56} & \textbf{30.20} & \textbf{64.98} & 69.30 & \textbf{59.52} \\
+\midrule
+\multirow{2}{*}{70\%}
+& Wanda & 32.76 & 65.19 & 35.05 & 74.40 & 71.49 & 43.15 & 24.20 & \textbf{58.12} & 65.82 & 52.24 \\
+& MoE-Wanda & \textbf{37.03} & \textbf{69.49} & \textbf{39.13} & \textbf{75.75} & \textbf{75.24} & \textbf{46.59} & \textbf{27.00} & \textbf{58.12} & \textbf{66.46} & \textbf{54.98} \\
+\midrule
+\multirow{2}{*}{2:4}
+& Wanda & \textbf{40.19} & 72.14 & 45.62 & 77.58 & \textbf{75.84} & 50.88 & \textbf{30.60} & \textbf{65.70} & 68.19 & \textbf{58.53} \\
+& MoE-Wanda & 39.76 & \textbf{72.35} & \textbf{46.13} & \textbf{77.98} & \textbf{75.84} & \textbf{51.09} & 30.00 & 64.98 & \textbf{68.43} & 58.51 \\
+\bottomrule
+\end{tabular}
+}
+\end{table*}
+
+\subsection{DeepSeek-V2-Lite PPL Ablations}
+
+表 \ref{tab:ablation_routing_statistics} 比较了 top-$k$ routing statistics 与 dense-softmax routing statistics。
+在固定 routing power $p=2.0$ 且不启用 expert clustering 的设置下，dense-softmax 统计取得更低 perplexity。
+这支持了我们的核心判断：校准阶段使用 dense router distribution 可以缓解 top-$k$ 硬路由带来的统计稀疏性。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{lcc}
+\toprule
+Routing 统计 & Actual sparsity & PPL \\
+\midrule
+top-$k$, $p=2.0$ & 0.5000 & 7.8237 \\
+dense-softmax, $p=2.0$ & 0.5000 & \textbf{7.8188} \\
+\bottomrule
+\end{tabular}
+\caption{DeepSeek-V2-Lite 上 routing statistics 的消融结果。}
+\label{tab:ablation_routing_statistics}
+\end{table}
+
+表 \ref{tab:ablation_routing_power} 展示了 routing power $p$ 的影响。
+在不启用 expert clustering 的设置下，$p=1.0$ 取得最优结果。
+较小或较大的 $p$ 都会略微恶化 PPL，说明路由权重既不能被过度压平，也不能被过度放大。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{ccc}
+\toprule
+Routing power $p$ & Actual sparsity & PPL \\
+\midrule
+0.5 & 0.5000 & 7.8083 \\
+1.0 & 0.5000 & \textbf{7.8018} \\
+1.5 & 0.5000 & 7.8085 \\
+2.0 & 0.5000 & 7.8188 \\
+\bottomrule
+\end{tabular}
+\caption{DeepSeek-V2-Lite 上 routing power 的消融结果。}
+\label{tab:ablation_routing_power}
+\end{table}
+
+表 \ref{tab:ablation_cluster_k} 展示了 router-trace expert clustering 的 cluster 数量消融。
+在 dense-softmax 统计和 $p=1.5$ 下，较小的 cluster 数量表现更好，其中 $K=5$ 取得最低 PPL。
+这说明在当前设置下，让更多功能相近的 expert 共享剪枝预算能够带来更稳定的稀疏分配；过大的 $K$ 会逐渐接近过细粒度的局部竞争，收益下降。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{ccc}
+\toprule
+Cluster 数量 $K$ & Actual sparsity & PPL \\
+\midrule
+5  & 0.5000 & \textbf{7.7420} \\
+10 & 0.5000 & 7.7723 \\
+15 & 0.5000 & 7.8144 \\
+20 & 0.5000 & 7.8387 \\
+25 & 0.5000 & 7.8533 \\
+30 & 0.5000 & 7.8650 \\
+\bottomrule
+\end{tabular}
+\caption{DeepSeek-V2-Lite 上 expert clustering 数量的消融结果。}
+\label{tab:ablation_cluster_k}
+\end{table}
+\FloatBarrier
+
+\subsection{Structured 2:4 GEMM Latency}
+
+表 \ref{tab:moe_24_gemm_speedup} 报告了 MoE expert linear layers 在结构化 2:4 稀疏下的 GEMM latency。
+小 token batch 下 2:4 kernel 存在额外开销，但当 token 数增加后，2:4 稀疏 GEMM 开始体现加速收益。
+
+\begin{table}[H]
+\centering
+\small
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.12}
+\begin{tabular}{llccc}
+\toprule
+Setting & MoE layer & Dense & 2:4 & Speedup \\
+\midrule
+Tokens=8,192 & $down_{\mathrm{proj}}$ & 0.25 & 0.66 & 0.38$\times$ \\
+Tokens=8,192 & $up/gate_{\mathrm{proj}}$ & 0.26 & 0.65 & 0.40$\times$ \\
+Tokens=32,768 & $down_{\mathrm{proj}}$ & 0.96 & 0.88 & 1.10$\times$ \\
+Tokens=32,768 & $up/gate_{\mathrm{proj}}$ & 0.96 & 0.85 & 1.13$\times$ \\
+Tokens=65,536 & $down_{\mathrm{proj}}$ & 1.90 & 1.74 & 1.09$\times$ \\
+Tokens=65,536 & $up/gate_{\mathrm{proj}}$ & 1.89 & 1.69 & 1.12$\times$ \\
+Tokens=131,072 & $down_{\mathrm{proj}}$ & 3.83 & 3.53 & 1.09$\times$ \\
+Tokens=131,072 & $up/gate_{\mathrm{proj}}$ & 3.77 & 3.43 & 1.10$\times$ \\
+Tokens=524,288 & $down_{\mathrm{proj}}$ & 15.72 & 13.92 & 1.13$\times$ \\
+Tokens=524,288 & $up/gate_{\mathrm{proj}}$ & 15.33 & 13.81 & 1.11$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{MoE expert linear layers 在结构化 2:4 稀疏下的 GEMM latency 对比。Latency 单位为 milliseconds，speedup 越高越好。}
+\label{tab:moe_24_gemm_speedup}
+\end{table}
+\FloatBarrier
+
+\section{Conclusion}
+
+普通 Wanda 的成功来自一个简洁的局部线性扰动近似。
+但 MoE-SwiGLU 模型引入了路由器、expert 分工、乘性门控和非线性调制，使得普通线性层近似在高稀疏率下变得不充分。
+我们提出的 MoE-Wanda 从 MoE 层输出扰动出发，为 down/up/gate projection 分别构造路由感知剪枝分数，并通过 dense-softmax 统计、routing power 和 router-trace expert clustering 提升高稀疏率下的稳定性。
+该方法的核心逻辑是将剪枝分数从“输入激活是否大”推进到“置零该权重会对 MoE 层输出造成多大路由加权扰动”。
+这也是其相对普通 Wanda 的主要创新。
+
+\end{document}
