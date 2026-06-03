@@ -2,9 +2,13 @@
 [2026-06-02 17:00:15] 
 === Evaluation Results ===
 [2026-06-02 17:01:36] ARC: {'arc_challenge': {'alias': 'arc_challenge', 'acc,none': 0.41552901023890787, 'acc_stderr,none': 0.01440136664121639, 'acc_norm,none': 0.4325938566552901, 'acc_norm_stderr,none': 0.014478005694182528}, 'arc_easy': {'alias': 'arc_easy', 'acc,none': 0.7516835016835017, 'acc_stderr,none': 0.008865199020660961, 'acc_norm,none': 0.7293771043771043, 'acc_norm_stderr,none': 0.009116466166403828}}
-[2026-06-02 17:06:00] MMLU evaluation failed: CUDA out of memory. Tried to allocate 20.10 GiB. GPU 0 has a total capacty of 79.25 GiB of which 20.06 GiB is free. Including non-PyTorch memory, this process has 59.18 GiB memory in use. Of the allocated memory 58.52 GiB is allocated by PyTorch, and 169.80 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
+[2026-06-03 12:10:46] MMLU humanities: acc=0.4721, tasks=13, samples=4705
+[2026-06-03 12:10:46] MMLU stem: acc=0.4225, tasks=19, samples=3153
+[2026-06-03 12:10:46] MMLU social_sciences: acc=0.5866, tasks=12, samples=3077
+[2026-06-03 12:10:46] MMLU other: acc=0.5706, tasks=13, samples=3107
+[2026-06-03 12:10:46] MMLU overall: acc=0.5078, tasks=57, samples=14042
+[2026-06-03 12:11:47] BoolQ: {'boolq': {'alias': 'boolq', 'acc,none': 0.7914373088685015, 'acc_stderr,none': 0.0071059003096447535}}
 [2026-06-02 17:06:28] PIQA: {'piqa': {'alias': 'piqa', 'acc,none': 0.779107725788901, 'acc_stderr,none': 0.00967908804884222, 'acc_norm,none': 0.7883569096844396, 'acc_norm_stderr,none': 0.009530351270479399}}
-[2026-06-02 17:06:50] BoolQ evaluation failed: CUDA out of memory. Tried to allocate 12.79 GiB. GPU 0 has a total capacty of 79.25 GiB of which 12.52 GiB is free. Including non-PyTorch memory, this process has 66.72 GiB memory in use. Of the allocated memory 66.05 GiB is allocated by PyTorch, and 177.79 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
 [2026-06-02 17:10:47] HellaSwag: {'hellaswag': {'alias': 'hellaswag', 'acc,none': 0.5540728938458475, 'acc_stderr,none': 0.004960516570284904, 'acc_norm,none': 0.743079067914758, 'acc_norm_stderr,none': 0.004360424536145124}}
 [2026-06-02 17:11:07] OBQA: {'openbookqa': {'alias': 'openbookqa', 'acc,none': 0.318, 'acc_stderr,none': 0.020847571620814014, 'acc_norm,none': 0.42, 'acc_norm_stderr,none': 0.02209471322976178}}
 [2026-06-02 17:11:24] RTE: {'rte': {'alias': 'rte', 'acc,none': 0.6534296028880866, 'acc_stderr,none': 0.02864445699455753}}
